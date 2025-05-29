@@ -1,4 +1,6 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Coordinate3D {
     pub x: u8,
     pub y: u8,
@@ -96,11 +98,8 @@ impl Coordinate3D {
 #[cfg(test)]
 mod tests {
     use super::*; // Imports Coordinate3D
-    // To test rotate and scale, we would need to make Axis and helpers available here.
-    // For now, these tests will be added in a subsequent step when module linking is addressed.
-    // If geometric_crypto/core/mod.rs existed and declared `pub mod transforms;`,
-    // then `use super::super::transforms::Axis;` might be needed in tests,
-    // or `use crate::core::transforms::Axis;` if lib.rs is set up.
+    use serde_json; // For JSON serialization tests
+    // Axis is available via super::transforms::Axis, consistent with its usage in rotate method.
 
     #[test]
     fn test_new_coordinate() {
@@ -173,5 +172,157 @@ mod tests {
         assert_eq!(c1, Coordinate3D::new(1, 2, 3));
         assert_eq!(c2, Coordinate3D::new(1, 2, 3));
         assert_eq!(c3, Coordinate3D::new(1, 2, 3));
+    }
+
+    // Tests for rotate and scale methods
+
+    #[test]
+    fn test_coordinate_rotation_x_axis_90_degrees() {
+        // For X-axis rotation by 90 deg:
+        // x' = x
+        // y' = y*cos(90) - z*sin(90) = -z
+        // z' = y*sin(90) + z*cos(90) = y
+        let c = Coordinate3D::new(10, 20, 30);
+        // Rotate around X by 90 degrees. cos(90)=0, sin(90)=1
+        // x' = 10
+        // y' = 20*0 - 30*1 = -30. Clamped to 0.
+        // z' = 20*1 + 30*0 = 20.
+        let rotated = c.rotate(super::transforms::Axis::X, 90.0);
+        assert_eq!(rotated, Coordinate3D::new(10, 0, 20), "Rotation X by 90 deg failed");
+
+        let c2 = Coordinate3D::new(10, 200, 150);
+        // x' = 10
+        // y' = 200*0 - 150*1 = -150. Clamped to 0.
+        // z' = 200*1 + 150*0 = 200.
+        let rotated2 = c2.rotate(super::transforms::Axis::X, 90.0);
+        assert_eq!(rotated2, Coordinate3D::new(10, 0, 200));
+    }
+
+    #[test]
+    fn test_coordinate_rotation_y_axis_90_degrees() {
+        // For Y-axis rotation by 90 deg:
+        // x' = x*cos(90) + z*sin(90) = z
+        // y' = y
+        // z' = -x*sin(90) + z*cos(90) = -x
+        let c = Coordinate3D::new(10, 20, 30);
+        // x' = 10*0 + 30*1 = 30
+        // y' = 20
+        // z' = -10*1 + 30*0 = -10. Clamped to 0.
+        let rotated = c.rotate(super::transforms::Axis::Y, 90.0);
+        assert_eq!(rotated, Coordinate3D::new(30, 20, 0), "Rotation Y by 90 deg failed");
+    }
+
+    #[test]
+    fn test_coordinate_rotation_z_axis_90_degrees() {
+        // For Z-axis rotation by 90 deg:
+        // x' = x*cos(90) - y*sin(90) = -y
+        // y' = x*sin(90) + y*cos(90) = x
+        // z' = z
+        let c = Coordinate3D::new(10, 20, 30);
+        // x' = 10*0 - 20*1 = -20. Clamped to 0.
+        // y' = 10*1 + 20*0 = 10
+        // z' = 30
+        let rotated = c.rotate(super::transforms::Axis::Z, 90.0);
+        assert_eq!(rotated, Coordinate3D::new(0, 10, 30), "Rotation Z by 90 deg failed");
+    }
+    
+    #[test]
+    fn test_coordinate_rotation_180_degrees() {
+        // Rotating by 180 degrees around X: (x, -y, -z)
+        let c = Coordinate3D::new(10, 20, 30);
+        // x' = 10
+        // y' = 20*(-1) - 30*0 = -20 -> 0
+        // z' = 20*0 + 30*(-1) = -30 -> 0
+        let rotated_x180 = c.rotate(super::transforms::Axis::X, 180.0);
+        assert_eq!(rotated_x180, Coordinate3D::new(10, 0, 0)); // Clamped due to positive coord space
+
+        // Let's use values that stay positive after negation if we imagine a [-127, 127] space,
+        // but for u8, it's always clamping or wrapping.
+        // The current clamp_to_u8(val.round().max(0.0).min(255.0) as u8) means negative results become 0.
+        // A rotation of (10,20,30) around X by 180 deg where center of space is e.g. (128,128,128) would be different.
+        // But our rotation is around (0,0,0).
+        // So, (10, 20, 30) -> (10, 20*cos(180)-30*sin(180), 20*sin(180)+30*cos(180)) = (10, -20, -30) -> (10,0,0) after clamping.
+        // This is the expected behavior with the current implementation.
+    }
+
+    #[test]
+    fn test_coordinate_rotation_360_degrees() {
+        let c = Coordinate3D::new(10, 20, 30);
+        let rotated_x360 = c.rotate(super::transforms::Axis::X, 360.0);
+        // cos(360)=1, sin(360)=0
+        // x' = 10
+        // y' = 20*1 - 30*0 = 20
+        // z' = 20*0 + 30*1 = 30
+        assert_eq!(rotated_x360, Coordinate3D::new(10, 20, 30), "Rotation by 360 should be identity");
+    }
+
+    #[test]
+    fn test_coordinate_scaling_positive_factor() {
+        let c = Coordinate3D::new(10, 20, 30);
+        let scaled = c.scale(2.0);
+        assert_eq!(scaled, Coordinate3D::new(20, 40, 60));
+
+        let c2 = Coordinate3D::new(100, 150, 50);
+        let scaled2 = c2.scale(2.0); // 200, 300 (clamps to 255), 100
+        assert_eq!(scaled2, Coordinate3D::new(200, 255, 100));
+    }
+
+    #[test]
+    fn test_coordinate_scaling_zero_factor() {
+        let c = Coordinate3D::new(10, 20, 30);
+        let scaled = c.scale(0.0);
+        assert_eq!(scaled, Coordinate3D::new(0, 0, 0));
+    }
+    
+    #[test]
+    fn test_coordinate_scaling_one_factor() {
+        let c = Coordinate3D::new(10, 20, 30);
+        let scaled = c.scale(1.0);
+        assert_eq!(scaled, Coordinate3D::new(10, 20, 30));
+    }
+
+    #[test]
+    fn test_coordinate_scaling_fractional_factor() {
+        let c = Coordinate3D::new(10, 20, 30);
+        let scaled = c.scale(0.5); // 5, 10, 15
+        assert_eq!(scaled, Coordinate3D::new(5, 10, 15));
+
+        let c2 = Coordinate3D::new(11, 21, 31);
+        let scaled2 = c2.scale(0.5); // 5.5->6, 10.5->11, 15.5->16 (due to round())
+        assert_eq!(scaled2, Coordinate3D::new(6, 11, 16));
+    }
+
+    #[test]
+    fn test_coordinate_scaling_negative_factor() {
+        // Current implementation of scale for negative factor results in (0,0,0)
+        let c = Coordinate3D::new(10, 20, 30);
+        let scaled = c.scale(-1.0);
+        assert_eq!(scaled, Coordinate3D::new(0,0,0), "Scaling by negative factor should result in (0,0,0)");
+        
+        let scaled_neg_two = c.scale(-2.0);
+        assert_eq!(scaled_neg_two, Coordinate3D::new(0,0,0), "Scaling by negative factor should result in (0,0,0)");
+    }
+
+    #[test]
+    fn test_coordinate_serialization_deserialization_json() {
+        let original_coord = Coordinate3D::new(10, 20, 30);
+
+        // Serialize to JSON string
+        let json_data = serde_json::to_string(&original_coord).expect("JSON serialization failed");
+
+        // Deserialize from JSON string
+        let deserialized_coord: Coordinate3D = serde_json::from_str(&json_data).expect("JSON deserialization failed");
+
+        assert_eq!(original_coord, deserialized_coord, "Deserialized coordinate should match original");
+    }
+
+    #[test]
+    fn test_coordinate_serialization_bincode() {
+        // Bincode is another common binary format. Add if desired, or stick to JSON for this test.
+        // This would require `bincode` as a dev-dependency as well, though it's already a main dependency.
+        let original_coord = Coordinate3D::new(101, 102, 103);
+        let encoded: Vec<u8> = bincode::serialize(&original_coord).expect("Bincode serialization failed");
+        let decoded: Coordinate3D = bincode::deserialize(&encoded[..]).expect("Bincode deserialization failed");
+        assert_eq!(original_coord, decoded);
     }
 }

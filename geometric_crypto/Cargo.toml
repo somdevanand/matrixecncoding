@@ -25,7 +25,7 @@ blake3 = "1.3"
 chacha20 = "0.9"
 rand = "0.8" # For general random utilities if needed, ChaCha20 specific seeding is handled by the chacha20 crate
 rand_core = { version = "0.6", features = ["std"] } # Explicitly for SeedableRng, RngCore if not covered
-rayon = "1.7"
+rayon = { version = "1.7", optional = true } # Made optional for feature 'parallel'
 lru = "0.10.0" # The original doc had 0.10, common versions are 0.7, 0.8, 0.12. Let's use a recent one like 0.12.0
 # For lru, let's use a version that is commonly available and stable. 0.12.1 is recent.
 # However, the issue specified 0.10. If it's a strict requirement, use that. Let's stick to 0.10 as per doc for now.
@@ -33,11 +33,12 @@ lru = "0.10.0" # The original doc had 0.10, common versions are 0.7, 0.8, 0.12. 
 thiserror = "1.0"
 tracing = "0.1"
 tracing-subscriber = "0.3"
+criterion = { version = "0.4", features = ["html_reports"], optional = true } # Moved from dev-dependencies for feature 'benchmark'
 
 [dev-dependencies]
-criterion = { version = "0.4", features = ["html_reports"] } # criterion 0.5 is also common
 proptest = "1.0" # proptest 1.4.0 is recent
 tempfile = "3.0" # tempfile 3.8.0 is recent
+serde_json = "1.0" # For testing serde serialization
 
 # Sticking to specified versions:
 # criterion = { version = "0.4", features = ["html_reports"] }
@@ -53,27 +54,27 @@ network = ["tokio/net"]
 benchmark = ["criterion"] # For enabling benchmark-specific code/dependencies
 
 # Benchmark targets - these will be linked to files in benches/
-[[bench]]
-name = "compression_benchmarks"
-harness = false
+# [[bench]]
+# name = "compression_benchmarks"
+# harness = false
 
-[[bench]]
-name = "security_benchmarks"
-harness = false
+# [[bench]]
+# name = "security_benchmarks"
+# harness = false
 
-[[bench]]
-name = "network_benchmarks"
-harness = false
+# [[bench]]
+# name = "network_benchmarks"
+# harness = false
 
 # Example targets - these will be linked to files in examples/
-[[example]]
-name = "basic_usage"
-path = "examples/basic_usage.rs"
+# [[example]]
+# name = "basic_usage"
+# path = "examples/basic_usage.rs"
 
-[[example]]
-name = "streaming_encryption"
-path = "examples/streaming_encryption.rs"
+# [[example]]
+# name = "streaming_encryption"
+# path = "examples/streaming_encryption.rs"
 
-[[example]]
-name = "multi_party_communication"
-path = "examples/multi_party_communication.rs"
+# [[example]]
+# name = "multi_party_communication"
+# path = "examples/multi_party_communication.rs"

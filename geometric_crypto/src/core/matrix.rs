@@ -13,8 +13,8 @@ pub enum CryptoError {
 pub struct GeometricMatrix {
     seed: [u8; 32],
     generator: SecurePrng,
-    pub byte_to_coord_map: Vec<Coordinate3D>, // Made public for easier testing initially
-    pub coord_to_byte_map: HashMap<Coordinate3D, u8>, // Made public for easier testing
+    pub(crate) byte_to_coord_map: Vec<Coordinate3D>, 
+    pub(crate) coord_to_byte_map: HashMap<Coordinate3D, u8>, 
 }
 
 impl GeometricMatrix {
