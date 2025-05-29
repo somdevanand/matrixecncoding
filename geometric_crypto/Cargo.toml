@@ -15,6 +15,7 @@ tokio = { version = "1.0", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 bincode = "1.3"
 blake3 = "1.3"
+byteorder = "1.0" # Added byteorder
 # Use the correct crate name for chacha20, which is typically `chacha20`
 # The original issue doc had `chacha20 = "0.9"` which implies the crate name `chacha20`.
 # rand_core is often a transitive dependency or part of a larger rand prelude.
@@ -22,9 +23,10 @@ blake3 = "1.3"
 # Let's ensure `rand_core` is explicitly listed if direct use of its traits (like SeedableRng) is needed,
 # though often the primary RNG crate (like `chacha20`) re-exports or handles this.
 # The `chacha20` crate version 0.9.x depends on `rand_core` 0.6.x.
-chacha20 = "0.9"
+chacha20 = "0.9" # Removed "rng" feature, assuming it's incorrect or default
 rand = "0.8" # For general random utilities if needed, ChaCha20 specific seeding is handled by the chacha20 crate
 rand_core = { version = "0.6", features = ["std"] } # Explicitly for SeedableRng, RngCore if not covered
+rand_chacha = "0.3.1" # Added rand_chacha dependency
 rayon = { version = "1.7", optional = true } # Made optional for feature 'parallel'
 lru = "0.10.0" # The original doc had 0.10, common versions are 0.7, 0.8, 0.12. Let's use a recent one like 0.12.0
 # For lru, let's use a version that is commonly available and stable. 0.12.1 is recent.

@@ -1,0 +1,10 @@
+# Ignore Rust build artifacts
+target/
+
+# Ignore other common files
+*.log
+*.bk
+*.swp
+*~
+._*
+DS_Store

@@ -1,34 +1,34 @@
-use chacha20::ChaCha20Rng;
-use chacha20::rand_core::{SeedableRng, RngCore};
+use rand_chacha::ChaCha20Rng; // Using rand_chacha directly
+use rand_core::{SeedableRng, RngCore};
 
 pub struct SecurePrng {
-    rng: ChaCha20Rng,
+    rng: ChaCha20Rng, // Type from rand_chacha
 }
 
 impl SecurePrng {
     /// Creates a new PRNG instance seeded with the given 32-byte seed.
     pub fn new(seed: [u8; 32]) -> Self {
-        // ChaCha20Rng::from_seed expects a [u8; 32] seed.
-        // The stream number can be set to 0 for simplicity here.
         Self {
-            rng: ChaCha20Rng::from_seed(seed),
+            // ChaCha20Rng should implement SeedableRng.
+            // .into() converts [u8;32] to the seed type GenericArray<u8, U32>.
+            rng: ChaCha20Rng::from_seed(seed.into()),
         }
     }
 
     /// Fills the destination byte slice with random data.
     pub fn fill_bytes(&mut self, dest: &mut [u8]) {
+        // ChaCha20Rng should implement RngCore.
         self.rng.fill_bytes(dest);
     }
 
     /// Generates a u64 random number.
     pub fn next_u64(&mut self) -> u64 {
+        // ChaCha20Rng should implement RngCore.
         self.rng.next_u64()
     }
 
     /// Generates a u8 random number.
     pub fn next_u8(&mut self) -> u8 {
-        // You can obtain a u8 by taking a portion of u32 or u64,
-        // or by filling a single-byte slice.
         let mut buffer = [0u8; 1];
         self.rng.fill_bytes(&mut buffer);
         buffer[0]

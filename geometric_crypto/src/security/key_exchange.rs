@@ -91,10 +91,10 @@ mod tests {
         assert_ne!(shared_secret1, shared_secret2, "Stub shared secrets are not symmetrical and should differ here.");
 
         // Verify that compute_shared_secret uses the other_public_key
-        let hash_p2_pub = blake3::hash(&pair2.public_key).into();
+        let hash_p2_pub: [u8; 32] = blake3::hash(&pair2.public_key).into();
         assert_eq!(shared_secret1, hash_p2_pub, "Shared secret 1 should be hash of P2 public key");
 
-        let hash_p1_pub = blake3::hash(&pair1.public_key).into();
+        let hash_p1_pub: [u8; 32] = blake3::hash(&pair1.public_key).into();
         assert_eq!(shared_secret2, hash_p1_pub, "Shared secret 2 should be hash of P1 public key");
     }
 

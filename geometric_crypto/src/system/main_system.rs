@@ -53,6 +53,8 @@ pub enum GeometricCryptoError {
     SecurityError(#[from] SecurityError), 
     #[error("Compression Engine Error: {0}")]
     CompressionError(#[from] CompressionEngineError),
+    #[error("Decompression Engine Error: {0}")]
+    DecompressionError(#[from] crate::compression::engine::DecompressionError), // Added this line
     #[error("Network Layer Error: {0}")]
     NetworkError(#[from] NetworkLayerError),
     #[error("Key not set for operation")]
@@ -62,10 +64,10 @@ pub enum GeometricCryptoError {
 }
 
 
-#[derive(Debug, Clone)] 
+// Removed Debug because CoreEngine no longer derives Debug.
 pub struct GeometricCryptoSystem {
     core_engine: CoreEngine,
-    compression_engine: CompressionEngine,
+    compression_engine: CompressionEngine, // CompressionEngine still derives Debug
     security_layer: SecurityLayer,
     network_layer: NetworkLayer,
     config: SystemConfiguration,

@@ -1,9 +1,9 @@
 use crate::core::coordinates::Coordinate3D;
 use crate::compression::operations::{GeometricOperation, InterpolationType, EncodingScheme, Matrix3x3, CoordinateDelta, CompressedValues, MathFunction, CoordinateRegion, TrigFuncType}; // Added all ops types for get_sample_ops
 use super::obfuscation::CoordinateObfuscator;
-use super::integrity::{IntegrityVerifier, IntegrityProof};
+use super::integrity::IntegrityVerifier; // IntegrityVerifier is in integrity.rs
 use super::key_manager::KeyManager; // Import KeyManager
-use super::{SecurityError, SecurityContext};
+use super::{SecurityError, SecurityContext, IntegrityProof}; // SecurityContext, SecurityError, and IntegrityProof from mod.rs
 
 #[derive(Debug, Clone)]
 pub struct SecurityLayer {

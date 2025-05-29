@@ -9,7 +9,7 @@ pub struct CoordinateMetadata {
     // Add other relevant metadata fields as needed
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)] // Added Clone
 pub struct DiskBackedCoordinateMap; // Placeholder for on-disk K/V store logic
 
 impl DiskBackedCoordinateMap {

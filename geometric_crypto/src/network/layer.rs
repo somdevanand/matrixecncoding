@@ -2,7 +2,7 @@ use super::NetworkError;
 use crate::security::IntegrityProof;
 use crate::compression::operations::GeometricOperation; // Added
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
-use std::io::Cursor;
+use std::io::{Cursor, Read}; // Added std::io::Read
 use bincode; // Added for internal serialization
 
 #[derive(Debug, Default, Clone)]

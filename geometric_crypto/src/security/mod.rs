@@ -7,6 +7,7 @@ pub mod key_exchange;
 pub mod layer;
 pub mod key_manager; 
 pub mod audit; // Added line
+pub mod prng; // Added prng module
 
 // Common error type for the security module
 #[derive(Debug, thiserror::Error)]

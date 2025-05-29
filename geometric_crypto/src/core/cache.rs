@@ -6,9 +6,9 @@ use std::num::NonZeroUsize;
 
 const L1_SIZE: usize = 1024; // Size of the L1 cache array
 
-#[derive(Debug)] // LruCache is Debug if K,V are Debug. DiskBackedCoordinateMap is Debug.
+#[derive(Debug)] // Removed Clone
 pub struct HierarchicalCoordinateCache {
-    l1_cache: Vec<Option<(Coordinate3D, CoordinateMetadata)>>, // Using Vec for fixed size, initialized
+    l1_cache: Vec<Option<(Coordinate3D, CoordinateMetadata)>>,
     l2_cache: LruCache<Coordinate3D, CoordinateMetadata>,
     cold_storage: Option<DiskBackedCoordinateMap>,
     // Basic hashing for L1: just use one component or a simple mix.
@@ -92,11 +92,17 @@ impl HierarchicalCoordinateCache {
         // Evict current L1 item to L2 if the slot is occupied by a different coordinate
         if let Some((stored_coord, stored_meta)) = self.l1_cache[l1_idx].take() { // take() sets slot to None
              if stored_coord != coord {
-                 if let Some(evicted_l2) = self.l2_cache.put(stored_coord, stored_meta) {
-                     if let Some(cold_storage) = &mut self.cold_storage {
-                         cold_storage.put(evicted_l2.0, evicted_l2.1); // evicted_l2 is (K,V)
-                     }
-                 }
+                 // LruCache::put returns Option<V>, not Option<(K,V)>.
+                 // This means we only get the evicted_value, not its key.
+                 // The current DiskBackedCoordinateMap::put expects a key.
+                 // For now, we'll skip putting to cold_storage if we don't have the key easily.
+                 // A more complex solution might involve peeking at the LRU item before it's evicted.
+                 let _evicted_value_option = self.l2_cache.put(stored_coord, stored_meta);
+                 // if let Some(evicted_value) = evicted_value_option {
+                 //     if let Some(cold_storage) = &mut self.cold_storage {
+                 //         // cold_storage.put(evicted_key, evicted_value); // We don't have evicted_key here
+                 //     }
+                 // }
              }
         }
         // Place new item in L1
@@ -105,13 +111,14 @@ impl HierarchicalCoordinateCache {
         // Also update L2 (or put if not present).
         // This makes L2 a superset of L1's non-empty unique items, or close to it.
         // This policy can vary. Here, we ensure what's in L1 is also fresh in L2.
-        if let Some(evicted_l2) = self.l2_cache.put(coord, metadata) {
-             if let Some(cold_storage) = &mut self.cold_storage {
-                  if evicted_l2.0 != coord { // Don't write back if it's the same key we just updated
-                     cold_storage.put(evicted_l2.0, evicted_l2.1);
-                  }
-             }
-        }
+        let _evicted_value_option = self.l2_cache.put(coord, metadata);
+        // if let Some(evicted_value) = evicted_value_option {
+        //     if let Some(cold_storage) = &mut self.cold_storage {
+        //         // cold_storage.put(evicted_key, evicted_value); // We don't have evicted_key here
+        //         // And, if evicted_key was somehow available, the check `evicted_key != coord`
+        //         // would be relevant.
+        //     }
+        // }
     }
 }
 

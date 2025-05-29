@@ -2,14 +2,18 @@ use crate::core::coordinates::Coordinate3D;
 use crate::security::prng::SecurePrng; // Assuming prng.rs is in security module, adjust path if needed
 use std::collections::{HashMap, HashSet}; // Added HashSet for uniqueness check
 use blake3::Hasher; // Add this for mixing seed and position
+use thiserror::Error; // Added for CryptoError
 
 // Define a basic CryptoError enum for now. This might be expanded later.
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum CryptoError {
+    #[error("Mapping generation failed: {0}")]
     MappingGenerationFailed(String),
     // Other errors can be added here
 }
 
+// Removed Debug because SecurePrng no longer derives Debug.
+// If Debug is needed for GeometricMatrix, a custom impl would be required.
 pub struct GeometricMatrix {
     seed: [u8; 32],
     generator: SecurePrng,
@@ -165,7 +169,7 @@ mod tests {
             let byte_val = i as u8;
             
             // Test forward mapping (byte_to_coord_map)
-            assert!(byte_val as usize  < matrix.byte_to_coord_map.len(), "Index out of bounds for byte_val: {}", byte_val);
+            assert!((byte_val as usize) < matrix.byte_to_coord_map.len(), "Index out of bounds for byte_val: {}", byte_val);
             let coord = matrix.byte_to_coord_map[byte_val as usize];
             
             // Test reverse mapping (coord_to_byte_map)

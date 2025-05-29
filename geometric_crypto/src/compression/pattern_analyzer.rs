@@ -83,64 +83,74 @@ impl PatternAnalyzer {
         }
 
         let n = coords.len();
-        let mut cluster_ids = vec![UNDEFINED; n]; // Store cluster ID for each point
-        let mut current_cluster_id = NOISE + 1; // Start cluster IDs from 1
+        let mut cluster_ids = vec![UNDEFINED; n]; // Stores cluster_id for each point, initialized to UNDEFINED
+        let mut current_cluster_id = NOISE + 1; // Cluster IDs start from 1 (0 is for NOISE)
 
+        // Main loop: Iterate through each point
         for i in 0..n {
-            if cluster_ids[i] != UNDEFINED { // Already processed
+            if cluster_ids[i] != UNDEFINED { // Point already visited and classified (part of a cluster or noise)
                 continue;
             }
 
+            // Find all points within epsilon_sq distance (neighbors)
             let neighbors_indices = self.region_query(coords, i, epsilon_sq);
 
             if neighbors_indices.len() < min_points {
+                // Not enough neighbors to form a core point's environment
                 cluster_ids[i] = NOISE; // Mark as noise
                 continue;
             }
 
-            // Core point found, start a new cluster
-            // Note: Corrected variable name from clusters_ids to cluster_ids
-            cluster_ids[i] = current_cluster_id; 
-            let mut seed_set = neighbors_indices.into_iter().collect::<HashSet<usize>>();
-            // The point itself (i) is part of its own neighborhood query, so it's in seed_set.
-            // We've assigned cluster_ids[i], so we can remove it from the seed_set to avoid re-processing it
-            // if it's not strictly necessary for queue setup, but ensure it's part of the cluster.
-            // The main loop for point `i` already handles `cluster_ids[i]`.
-            // The queue should contain neighbors to expand from.
+            // Point 'i' is a core point, start a new cluster
+            cluster_ids[i] = current_cluster_id;
             
-            let mut queue: Vec<usize> = seed_set.iter().cloned().filter(|&idx| idx != i).collect();
-            // It's also okay to leave `i` in the queue and let the `cluster_ids[q_idx] != UNDEFINED` check handle it.
-            // For clarity, let's process `i` and then use its neighbors.
+            // Use a queue to expand the cluster from this core point
+            // Initialize queue with the direct neighbors of the core point 'i'
+            // (excluding 'i' itself as it's already processed)
+            let mut queue: Vec<usize> = neighbors_indices.into_iter().filter(|&idx| idx != i).collect();
+            
+            // Process points in the queue to expand the cluster
+            let mut head = 0; // Use head index for queue to avoid inefficient pop(0)
+            while head < queue.len() {
+                let q_idx = queue[head]; // Current point from queue to process
+                head += 1;
 
-            while let Some(q_idx) = queue.pop() {
-                if cluster_ids[q_idx] == NOISE { // Change noise point to border point
+                if cluster_ids[q_idx] == NOISE {
+                    // Noise point is density-reachable, so it becomes a border point of the current cluster
                     cluster_ids[q_idx] = current_cluster_id;
                 }
-                if cluster_ids[q_idx] != UNDEFINED { // Already processed or became border point
+                
+                // If already processed and part of another cluster, or already part of this one, skip.
+                // Note: A point initially marked NOISE can be added to a cluster as a border point.
+                // If it's UNDEFINED, it's a new point for the cluster.
+                if cluster_ids[q_idx] != UNDEFINED && cluster_ids[q_idx] != NOISE { 
                     continue;
                 }
+                
                 cluster_ids[q_idx] = current_cluster_id; // Add to current cluster
 
+                // Check if this newly added point q_idx is also a core point
                 let q_neighbors_indices = self.region_query(coords, q_idx, epsilon_sq);
-                if q_neighbors_indices.len() >= min_points { // q_idx is also a core point
+                if q_neighbors_indices.len() >= min_points {
+                    // q_idx is a core point, add its unvisited/noise neighbors to the queue
                     for neighbor_idx in q_neighbors_indices {
-                        // Add new unvisited or noise points to the queue for expansion
                         if cluster_ids[neighbor_idx] == UNDEFINED || cluster_ids[neighbor_idx] == NOISE {
-                             if cluster_ids[neighbor_idx] == NOISE { 
-                                cluster_ids[neighbor_idx] = current_cluster_id; // Mark noise as border
-                            }
-                            // Add to queue only if it's truly unclassified to prevent redundant processing
-                            if cluster_ids[neighbor_idx] == UNDEFINED { 
+                            // Avoid re-adding points already in the queue or processed.
+                            // If it was noise, it now becomes part of this cluster (potentially border).
+                            // If it's UNDEFINED, it's a candidate for expansion.
+                            if !queue[head..].contains(&neighbor_idx) && cluster_ids[neighbor_idx] == UNDEFINED { // Check only unprocessed part of queue
                                 queue.push(neighbor_idx);
+                            } else if cluster_ids[neighbor_idx] == NOISE { // If it was noise, make it border
+                                cluster_ids[neighbor_idx] = current_cluster_id;
                             }
                         }
                     }
                 }
             }
-            current_cluster_id += 1; // Move to next cluster ID
+            current_cluster_id += 1; // Finished with the current cluster, move to the next ID
         }
 
-        // Group coordinates by cluster_id
+        // Group coordinates by their assigned cluster_ids
         let mut result_clusters_map: HashMap<usize, Vec<Coordinate3D>> = HashMap::new();
         for i in 0..n {
             if cluster_ids[i] != NOISE && cluster_ids[i] != UNDEFINED { // Ensure point was assigned to a valid cluster
@@ -231,52 +241,145 @@ mod tests {
 
     // Updated test for spatial_clustering
     #[test]
-    fn test_spatial_clustering_dbscan_like() { // Renamed from test_spatial_clustering_basic
+    fn test_spatial_clustering_dbscan_like() { 
         let analyzer = PatternAnalyzer::new();
         let coords = vec![
-            Coordinate3D::new(1,1,1),   // P0
-            Coordinate3D::new(2,1,1),   // P1
-            Coordinate3D::new(1,2,1),   // P2
+            Coordinate3D::new(1,1,1),   // P0 - C1
+            Coordinate3D::new(2,1,1),   // P1 - C1
+            Coordinate3D::new(1,2,1),   // P2 - C1
             Coordinate3D::new(10,10,10), // P3 (Noise)
-            Coordinate3D::new(20,20,20), // P4 Cluster 2, core
-            Coordinate3D::new(21,20,20), // P5 Cluster 2, neighbor
-            Coordinate3D::new(20,21,20), // P6 Cluster 2, neighbor
-            Coordinate3D::new(21,21,20), // P7 Cluster 2, density-reachable from P6
+            Coordinate3D::new(20,20,20), // P4 - C2 Core
+            Coordinate3D::new(21,20,20), // P5 - C2 Neighbor
+            Coordinate3D::new(20,21,20), // P6 - C2 Neighbor
+            Coordinate3D::new(21,21,20), // P7 - C2 Density-reachable from P6
         ];
-
+        // Epsilon_sq = 2 means points are neighbors if dist <= sqrt(2) (~1.414)
+        // P0-P1: dist_sq=1, P0-P2: dist_sq=1, P1-P2: dist_sq=2. All <= 2.
+        // P4-P5: dist_sq=1, P4-P6: dist_sq=1. P5-P7: dist_sq=1. P6-P7: dist_sq=1.
         let epsilon_sq = 2; 
-        let min_points = 3; 
+        let min_points = 3; // A point needs at least 2 other points (total 3) in its neighborhood to be a core point.
 
         let result = analyzer.spatial_clustering(&coords, epsilon_sq, min_points);
         assert!(result.is_ok());
         let mut clusters = result.unwrap();
         
+        // Sort clusters and their contents for consistent comparison
         for cluster in &mut clusters { cluster.sort_by_key(|c| (c.x, c.y, c.z)); }
         clusters.sort_by_key(|c| if c.is_empty() { (0,0,0) } else { (c[0].x, c[0].y, c[0].z) });
 
-        assert_eq!(clusters.len(), 2, "Expected 2 clusters, found {}. Clusters: {:?}", clusters.len(), clusters);
+        assert_eq!(clusters.len(), 2, "Expected 2 clusters. Found: {:?}", clusters);
 
-        let expected_c1 = vec![Coordinate3D::new(1,1,1), Coordinate3D::new(1,2,1), Coordinate3D::new(2,1,1)];
-        assert_eq!(clusters[0].len(), expected_c1.len(), "Cluster 1 length mismatch");
-        assert!(expected_c1.iter().all(|item| clusters[0].contains(item)), "Cluster 1 content mismatch: expected {:?}, got {:?}", expected_c1, clusters[0]);
+        let mut expected_c1_sorted = vec![coords[0], coords[1], coords[2]]; // P0,P1,P2
+        expected_c1_sorted.sort_by_key(|c| (c.x, c.y, c.z));
+        // Ensure clusters[0] is also sorted for comparison (already done by the loop)
+        assert_eq!(clusters[0], expected_c1_sorted, "Cluster 1 mismatch");
 
-        let expected_c2 = vec![
-            Coordinate3D::new(20,20,20), Coordinate3D::new(20,21,20),
-            Coordinate3D::new(21,20,20), Coordinate3D::new(21,21,20)
-        ];
-         assert_eq!(clusters[1].len(), expected_c2.len(), "Cluster 2 length mismatch");
-         assert!(expected_c2.iter().all(|item| clusters[1].contains(item)), "Cluster 2 content mismatch: expected {:?}, got {:?}", expected_c2, clusters[1]);
-
+        let mut expected_c2_sorted = vec![coords[4], coords[5], coords[6], coords[7]]; // P4,P5,P6,P7
+        expected_c2_sorted.sort_by_key(|c| (c.x, c.y, c.z));
+        // Ensure clusters[1] is also sorted for comparison (already done by the loop)
+        assert_eq!(clusters[1], expected_c2_sorted, "Cluster 2 mismatch");
+        
+        // Test empty input
         let empty_coords: Vec<Coordinate3D> = Vec::new();
         let result_empty = analyzer.spatial_clustering(&empty_coords, epsilon_sq, min_points);
         assert!(result_empty.is_ok());
         assert!(result_empty.unwrap().is_empty());
 
+        // Test min_points = 0 (error case)
         let result_min_points_zero = analyzer.spatial_clustering(&coords, epsilon_sq, 0);
         assert!(result_min_points_zero.is_err());
         match result_min_points_zero.err().unwrap() {
             CompressionError::NotImplementedDetails(msg) => assert_eq!(msg, "min_points must be > 0"),
             _ => panic!("Expected NotImplementedDetails error for min_points = 0"),
         }
+    }
+
+    #[test]
+    fn test_spatial_clustering_all_noise() {
+        let analyzer = PatternAnalyzer::new();
+        let coords = vec![
+            Coordinate3D::new(1,1,1),
+            Coordinate3D::new(10,10,10),
+            Coordinate3D::new(20,20,20),
+        ];
+        // Epsilon such that no two points are neighbors
+        let result = analyzer.spatial_clustering(&coords, 1, 2);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty(), "Expected no clusters, all points should be noise");
+    }
+
+    #[test]
+    fn test_spatial_clustering_border_point() {
+        let analyzer = PatternAnalyzer::new();
+        // P0, P1, P2 form a core. P3 is reachable by P2 but P3 itself is not core.
+        let coords = vec![
+            Coordinate3D::new(1,1,1), // P0 - Core
+            Coordinate3D::new(2,1,1), // P1 - Core
+            Coordinate3D::new(1,2,1), // P2 - Core
+            Coordinate3D::new(1,3,1), // P3 - Border, reachable from P2
+        ];
+        let epsilon_sq = 1; // Max dist 1 for neighborhood
+        let min_points = 3; // P0,P1,P2 are core. P3 has only P2 as neighbor.
+        
+        // P0 neighbors: P1, P2 (dist_sq=1 for both). Count=3. Core.
+        // P1 neighbors: P0 (dist_sq=1). Count=2. Not core by itself initially, but becomes part of P0's cluster.
+        // P2 neighbors: P0, P3 (dist_sq=1 for both). Count=3. Core.
+        // P3 neighbors: P2 (dist_sq=1). Count=2. Not core.
+        
+        let result = analyzer.spatial_clustering(&coords, epsilon_sq, min_points);
+        assert!(result.is_ok());
+        let mut clusters = result.unwrap();
+        assert_eq!(clusters.len(), 1, "Expected 1 cluster");
+        
+        let mut actual_cluster0_sorted = clusters[0].clone(); // Clone to sort if not already
+        actual_cluster0_sorted.sort_by_key(|c| (c.x,c.y,c.z)); // Ensure this specific cluster is sorted
+
+        let mut expected_c1_border_sorted = vec![coords[0], coords[1], coords[2], coords[3]];
+        expected_c1_border_sorted.sort_by_key(|c| (c.x,c.y,c.z));
+        assert_eq!(actual_cluster0_sorted, expected_c1_border_sorted, "Cluster should include the border point P3");
+    }
+
+    #[test]
+    fn test_spatial_clustering_distinct_clusters_close_proximity() {
+        let analyzer = PatternAnalyzer::new();
+        let coords = vec![
+            Coordinate3D::new(1,1,1), Coordinate3D::new(2,1,1), // Cluster 1
+            Coordinate3D::new(4,1,1), Coordinate3D::new(5,1,1), // Cluster 2
+        ];
+        // Epsilon_sq=1 makes (1,1,1)-(2,1,1) neighbors, and (4,1,1)-(5,1,1) neighbors.
+        // But (2,1,1) and (4,1,1) have dist_sq = (4-2)^2 = 4.
+        let result = analyzer.spatial_clustering(&coords, 1, 2); // min_points = 2
+        assert!(result.is_ok());
+        let mut clusters = result.unwrap();
+        for cluster in &mut clusters { cluster.sort_by_key(|c| (c.x,c.y,c.z));}
+        clusters.sort_by_key(|c| if c.is_empty() { (0,0,0) } else { (c[0].x,c[0].y,c[0].z) });
+        
+        assert_eq!(clusters.len(), 2, "Expected 2 distinct clusters");
+        assert_eq!(clusters[0], vec![coords[0], coords[1]]);
+        assert_eq!(clusters[1], vec![coords[2], coords[3]]);
+    }
+
+    #[test]
+    fn test_spatial_clustering_merged_by_bridge_point() {
+        let analyzer = PatternAnalyzer::new();
+        let coords = vec![
+            Coordinate3D::new(1,1,1), Coordinate3D::new(2,1,1), // Group A
+            Coordinate3D::new(3,1,1),                         // Bridge Point P_bridge
+            Coordinate3D::new(4,1,1), Coordinate3D::new(5,1,1), // Group B
+        ];
+        // P_bridge is neighbor to (2,1,1) and (4,1,1) with epsilon_sq=1.
+        // If min_points=2, (2,1,1) can be core, P_bridge becomes its neighbor.
+        // If P_bridge is also core (needs one other neighbor, e.g. (2,1,1) or (4,1,1)), it can merge.
+        // Let min_points = 2.
+        // (1,1,1) is core with (2,1,1).
+        // (2,1,1) is core with (1,1,1) and (3,1,1).
+        // (3,1,1) is core with (2,1,1) and (4,1,1). This merges.
+        // (4,1,1) is core with (3,1,1) and (5,1,1).
+        // (5,1,1) is core with (4,1,1).
+        let result = analyzer.spatial_clustering(&coords, 1, 2); // min_points = 2
+        assert!(result.is_ok());
+        let mut clusters = result.unwrap();
+        assert_eq!(clusters.len(), 1, "Expected 1 merged cluster");
+        assert_eq!(clusters[0].len(), 5, "Merged cluster should have 5 points");
     }
 }

@@ -41,9 +41,9 @@ impl KeyManager {
         // For simplicity, let's assume purpose is a valid UTF-8 string for context.
         let context_str = std::str::from_utf8(purpose).map_err(|_| SecurityError::KeyExchangeError("Purpose for key derivation is not valid UTF-8".to_string()))?;
         
-        let mut derived_key = [0u8; 32];
-        blake3::derive_key(context_str, master_key, &mut derived_key);
-        Ok(derived_key)
+        // blake3::derive_key returns the key directly.
+        let new_derived_key = blake3::derive_key(context_str, master_key);
+        Ok(new_derived_key)
     }
 }
 

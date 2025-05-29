@@ -20,10 +20,10 @@ impl Default for CoreEngineConfig { // Added default
     }
 }
 
-#[derive(Debug)] // GeometricMatrix and HierarchicalCoordinateCache are Debug
+// Removed Debug because GeometricMatrix no longer derives Debug.
 pub struct CoreEngine {
     matrix: GeometricMatrix,
-    cache: HierarchicalCoordinateCache, // Cache for CoordinateMetadata, not direct byte->coord mapping
+    cache: HierarchicalCoordinateCache, // HierarchicalCoordinateCache still derives Debug.
     seed: [u8; 32], // Store the seed used to initialize the matrix
 }
 

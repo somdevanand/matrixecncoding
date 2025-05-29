@@ -1,6 +1,6 @@
 use serde::{Serialize, Deserialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub struct Coordinate3D {
     pub x: u8,
     pub y: u8,
@@ -187,14 +187,14 @@ mod tests {
         // x' = 10
         // y' = 20*0 - 30*1 = -30. Clamped to 0.
         // z' = 20*1 + 30*0 = 20.
-        let rotated = c.rotate(super::transforms::Axis::X, 90.0);
+        let rotated = c.rotate(crate::core::transforms::Axis::X, 90.0);
         assert_eq!(rotated, Coordinate3D::new(10, 0, 20), "Rotation X by 90 deg failed");
 
         let c2 = Coordinate3D::new(10, 200, 150);
         // x' = 10
         // y' = 200*0 - 150*1 = -150. Clamped to 0.
         // z' = 200*1 + 150*0 = 200.
-        let rotated2 = c2.rotate(super::transforms::Axis::X, 90.0);
+        let rotated2 = c2.rotate(crate::core::transforms::Axis::X, 90.0);
         assert_eq!(rotated2, Coordinate3D::new(10, 0, 200));
     }
 
@@ -208,7 +208,7 @@ mod tests {
         // x' = 10*0 + 30*1 = 30
         // y' = 20
         // z' = -10*1 + 30*0 = -10. Clamped to 0.
-        let rotated = c.rotate(super::transforms::Axis::Y, 90.0);
+        let rotated = c.rotate(crate::core::transforms::Axis::Y, 90.0);
         assert_eq!(rotated, Coordinate3D::new(30, 20, 0), "Rotation Y by 90 deg failed");
     }
 
@@ -222,7 +222,7 @@ mod tests {
         // x' = 10*0 - 20*1 = -20. Clamped to 0.
         // y' = 10*1 + 20*0 = 10
         // z' = 30
-        let rotated = c.rotate(super::transforms::Axis::Z, 90.0);
+        let rotated = c.rotate(crate::core::transforms::Axis::Z, 90.0);
         assert_eq!(rotated, Coordinate3D::new(0, 10, 30), "Rotation Z by 90 deg failed");
     }
     
@@ -233,7 +233,7 @@ mod tests {
         // x' = 10
         // y' = 20*(-1) - 30*0 = -20 -> 0
         // z' = 20*0 + 30*(-1) = -30 -> 0
-        let rotated_x180 = c.rotate(super::transforms::Axis::X, 180.0);
+        let rotated_x180 = c.rotate(crate::core::transforms::Axis::X, 180.0);
         assert_eq!(rotated_x180, Coordinate3D::new(10, 0, 0)); // Clamped due to positive coord space
 
         // Let's use values that stay positive after negation if we imagine a [-127, 127] space,
@@ -248,7 +248,7 @@ mod tests {
     #[test]
     fn test_coordinate_rotation_360_degrees() {
         let c = Coordinate3D::new(10, 20, 30);
-        let rotated_x360 = c.rotate(super::transforms::Axis::X, 360.0);
+        let rotated_x360 = c.rotate(crate::core::transforms::Axis::X, 360.0);
         // cos(360)=1, sin(360)=0
         // x' = 10
         // y' = 20*1 - 30*0 = 20
