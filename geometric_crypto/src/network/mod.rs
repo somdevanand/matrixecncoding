@@ -27,5 +27,6 @@ pub enum NetworkError {
 // Re-export key public types
 pub use layer::NetworkLayer;
 pub use streaming::{StreamingFrame, frame_data, deframe_data};
-pub use sync::{SeedRequest, SeedResponse, CheckpointData, create_seed_request, handle_seed_request, verify_seed_response, get_sync_checkpoint, request_retransmit}; // Added line
+pub use sync::{SeedRequest, SeedResponse, CheckpointData, create_seed_request, handle_seed_request, verify_seed_response, get_sync_checkpoint, request_retransmit};
+pub use protocol::PROTOCOL_VERSION; // Added line
 // pub use serialization::{serialize_operations, deserialize_operations}; // If these are still top-level functions

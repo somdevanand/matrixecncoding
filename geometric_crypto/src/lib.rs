@@ -1,86 +1,91 @@
 // geometric_crypto/src/lib.rs
 
-// Core module and its submodules
+// Core module re-exports (confirm these are sufficient)
 pub mod core;
-// Re-export key core types for easier access at crate level
 pub use core::coordinates::Coordinate3D;
-pub use core::matrix::{GeometricMatrix, CryptoError}; // CryptoError from core::matrix
+pub use core::matrix::{GeometricMatrix, CryptoError};
 pub use core::transforms::Axis;
 pub use core::seed::derive_seed_from_key;
 pub use core::cache::HierarchicalCoordinateCache;
 pub use core::cache_structs::CoordinateMetadata;
 
-
-// Compression module and its submodules
+// Compression module re-exports (confirm these are sufficient)
 pub mod compression;
-// Re-export key compression types
 pub use compression::{CompressionEngine, CompressionError, GeometricOperation};
+// Potentially re-export supporting types from compression::operations if they are part of public API
+// pub use compression::operations::{PatternId, InterpolationType, EncodingScheme, Matrix3x3, ...};
 
 
-// Security module and its submodules
+// Security module re-exports (confirm these are sufficient)
 pub mod security;
-// Re-export key security types
-pub use security::{SecurityLayer, SecurityError, SecurityContext, IntegrityProof};
-// KeyManager is currently a simple default struct within security::layer,
-// if it becomes more significant, it could be re-exported too.
-// CoordinateObfuscator, IntegrityVerifier are internal to SecurityLayer for now.
+pub use security::{SecurityLayer, SecurityError, SecurityContext, IntegrityProof, KeyManager, log_security_event};
+// pub use security::key_exchange::{KeyExchangeManager, EphemeralKeyPair}; // If these are for direct use
 
 
 // Network module and its submodules
 pub mod network;
-// Re-export key network types
-pub use network::{NetworkLayer, NetworkError};
-// Potentially re-export serialization functions if they are meant to be public API
-// pub use network::serialization::{serialize_operations, deserialize_operations};
-
+// Update re-exports for network module:
+pub use network::{
+    NetworkLayer,
+    NetworkError,
+    PROTOCOL_VERSION,
+    StreamingFrame,       // From network::streaming
+    frame_data,           // From network::streaming
+    deframe_data,         // From network::streaming
+    SeedRequest,          // From network::sync
+    SeedResponse,         // From network::sync
+    CheckpointData,       // From network::sync
+    create_seed_request,  // From network::sync
+    handle_seed_request,  // From network::sync
+    verify_seed_response, // From network::sync
+    get_sync_checkpoint,  // From network::sync
+    request_retransmit    // From network::sync
+};
+// The individual serialization functions in network::serialization are not typically
+// re-exported if NetworkLayer methods are the primary interface.
 
 #[cfg(test)]
 mod tests {
     // use super::*; // Already here from previous setup.
 
     #[test]
-    fn lib_works() {
-        let result = 2 + 2;
-        assert_eq!(result, 4);
-    }
+    fn lib_works() { let result = 2 + 2; assert_eq!(result, 4); }
 
-    // Example test to check if a type from a sub-sub-module is accessible
-    // This depends on the pub declarations within those modules as well.
+
+    // Update test_public_api_access to include new network types
     #[test]
     fn test_public_api_access() {
-        // Test core API access
-        let _coord = crate::Coordinate3D::new(1,2,3); // Using re-exported path
+        // Core API
+        let _coord = crate::Coordinate3D::new(1,2,3);
         let _matrix_err: Result<(), crate::CryptoError> = Err(crate::CryptoError::MappingGenerationFailed("test".to_string()));
         
-        // Test compression API access
+        // Compression API
         let _comp_engine = crate::CompressionEngine::new();
         let _comp_err: Result<(), crate::CompressionError> = Err(crate::CompressionError::NotImplemented);
-
-        // Test security API access
-        // The following lines will cause compile errors if the types are not defined or not pub.
-        // Assuming SecurityLayer::new(), SecurityError::NotImplemented, SecurityContext (unit/default), IntegrityProof::default() exist.
-        // These types are not yet defined in the project, so these lines would fail.
-        // For the purpose of testing lib.rs structure, we comment them out if they cause failure due to missing types.
-        // However, the task is to *add* these re-exports, assuming the types *will* exist.
-        // So, the test should reflect the desired state.
-        // If the types are not created yet in their respective modules (e.g. security::layer),
-        // then this test will only pass once those are implemented.
-        // For now, let's assume the types exist for the sake of setting up lib.rs.
-        
-        // Placeholder for actual types if not yet fully implemented, to make test compile:
-        // This is a common strategy: define minimal stubs for types so API surface tests can pass.
-        // For this task, we assume the types are defined in their modules as per the pub use statements.
-        
-        let _sec_layer = crate::security::SecurityLayer::new(); // Path corrected to use module path
-        let _sec_err: Result<(), crate::security::SecurityError> = Err(crate::security::SecurityError::NotImplemented("test".to_string()));
-        let _sec_context = crate::security::SecurityContext; 
-        let _proof = crate::security::IntegrityProof::default();
+        let _sample_op = crate::GeometricOperation::RegionFill { // Requires pub use for GeometricOperation
+            start: _coord, end: _coord, fill_byte: 0, compression_ratio: 1.0
+        };
 
 
-        // Test network API access
-        let _net_layer = crate::network::NetworkLayer::new(); // Path corrected
-        let _net_err: Result<(), crate::network::NetworkError> = Err(crate::network::NetworkError::NotImplemented("test".to_string()));
+        // Security API
+        let _sec_layer = crate::SecurityLayer::new();
+        let _sec_err: Result<(), crate::SecurityError> = Err(crate::SecurityError::NotImplemented("test".to_string()));
+        let _sec_context = crate::SecurityContext::default();
+        let _proof = crate::IntegrityProof::default();
+        let _km = crate::KeyManager::new();
+        crate::log_security_event("API_TEST", "Security types accessible");
 
-        assert!(true); // If all above compile, API paths are likely okay.
+
+        // Network API
+        let _net_layer = crate::NetworkLayer::new();
+        let _net_err: Result<(), crate::NetworkError> = Err(crate::NetworkError::NotImplemented("test".to_string()));
+        assert_eq!(crate::PROTOCOL_VERSION, 1);
+        let _frame = crate::StreamingFrame::Header{total_payload_size:0, num_chunks:0};
+        let _s_req = crate::SeedRequest::default();
+        // Call a function too
+        let _s_resp = crate::handle_seed_request(&_s_req);
+
+
+        assert!(true); 
     }
 }
