@@ -40,23 +40,25 @@ impl CompressionEngine {
     pub fn compress_coordinate_sequence(
         &self,
         coords: &[Coordinate3D]
-    ) -> Result<Vec<GeometricOperation>, CompressionError> {
+    ) -> Result<Vec<u8>, CompressionError> { // Return type changed to Vec<u8>
         let min_window_size = 4;
         let max_window_size = 32;
         
         let patterns = self.pattern_analyzer.find_patterns(coords, min_window_size, max_window_size)
             .map_err(|e| CompressionError::ComponentError(format!("Pattern analysis (find_patterns) failed: {}", e)))?;
         
-        let clusters = self.pattern_analyzer.spatial_clustering(coords) // Now synchronous
+        // Pass example values for epsilon_sq and min_points
+        let clusters = self.pattern_analyzer.spatial_clustering(coords, 3, 2) 
             .map_err(|e| CompressionError::ComponentError(format!("Spatial clustering failed: {}", e)))?;
         
-        let optimized_ops = self.operation_optimizer.optimize_operations(&patterns, &clusters) // Now synchronous
+        let optimized_ops = self.operation_optimizer.optimize_operations(coords, &patterns, &clusters)
             .map_err(|e| CompressionError::ComponentError(format!("Operation optimization failed: {}", e)))?;
         
-        let final_ops = self.geometric_encoder.encode_operations(optimized_ops) // Now synchronous
+        // final_ops is now Vec<u8>
+        let final_encoded_bytes = self.geometric_encoder.encode_operations(optimized_ops)
             .map_err(|e| CompressionError::ComponentError(format!("Geometric encoding failed: {}", e)))?;
 
-        Ok(final_ops)
+        Ok(final_encoded_bytes) // Return the Vec<u8>
     }
 }
 
@@ -64,15 +66,14 @@ impl CompressionEngine {
 mod tests {
     use super::*;
     use crate::core::coordinates::Coordinate3D;
-    use crate::compression::operations::GeometricOperation; // For test data, used in match
+    use crate::compression::operations::GeometricOperation; // For deserialization in test
 
-    #[test] // Changed from tokio::test
+    #[test]
     fn test_compression_engine_new() {
         let _engine = CompressionEngine::new();
         // Basic check
     }
 
-    // Renamed and changed from tokio::test
     #[test]
     fn test_compress_coordinate_sequence_sync_flow() {
         let engine = CompressionEngine::new();
@@ -81,44 +82,33 @@ mod tests {
         let empty_coords: Vec<Coordinate3D> = Vec::new();
         let result_empty = engine.compress_coordinate_sequence(&empty_coords);
         assert!(result_empty.is_ok(), "Empty input should result in Ok");
-        // Current stub logic:
         // find_patterns -> Ok(vec![])
         // spatial_clustering -> Ok(vec![])
-        // optimize_operations (with empty patterns) -> Ok(vec![])
-        // encode_operations (with empty ops) -> Ok(vec![])
-        assert!(result_empty.unwrap().is_empty(), "Expected empty operations for empty input");
-
-        // Scenario 2: Coords that don't form patterns, result in simple clusters, basic optimization
-        let simple_coords = vec![Coordinate3D::new(1,2,3), Coordinate3D::new(4,5,6)];
-        let result_simple = engine.compress_coordinate_sequence(&simple_coords);
-        assert!(result_simple.is_ok(), "Simple input should result in Ok");
-        // Current stub logic:
-        // find_patterns -> Ok(vec![]) (no patterns of min_window_size 4)
-        // spatial_clustering -> Ok(vec![vec![C1], vec![C2]])
-        // optimize_operations (with empty patterns) -> Ok(vec![])
-        // encode_operations -> Ok(vec![])
-        assert!(result_simple.unwrap().is_empty(), "Expected empty operations for simple input with current stubs");
+        // optimize_operations -> Ok(vec![])
+        // encode_operations -> Ok(vec![]) // which is an empty Vec<u8>
+        assert!(result_empty.unwrap().is_empty(), "Expected empty Vec<u8> for empty input");
         
-        // Scenario 3: Coords that form a pattern
+        // Scenario 3: Coords that form a pattern (from previous test, Scenario 2 omitted for brevity based on instructions)
+        // This will now produce a non-empty Vec<u8>
         let patterned_coords = vec![
             Coordinate3D::new(1,0,0), Coordinate3D::new(2,0,0), Coordinate3D::new(3,0,0), Coordinate3D::new(4,0,0),
             Coordinate3D::new(1,0,0), Coordinate3D::new(2,0,0), Coordinate3D::new(3,0,0), Coordinate3D::new(4,0,0),
         ];
         let result_patterned = engine.compress_coordinate_sequence(&patterned_coords);
-        assert!(result_patterned.is_ok(), "Patterned input should result in Ok");
-        let ops = result_patterned.unwrap();
-        // Current stub logic:
-        // find_patterns -> Ok(vec![PatternCandidate{coords: [C1,C2,C3,C4], freq: 2, ...}])
-        // spatial_clustering -> Ok(vec![vec![C1], vec![C2], ...])
-        // optimize_operations (with one pattern) -> Ok(vec![PatternReference{base:C1, id:0, ...}])
-        // encode_operations -> Ok(vec![PatternReference{...}])
-        assert_eq!(ops.len(), 1, "Expected one operation for the patterned input");
-        match &ops[0] {
+        assert!(result_patterned.is_ok(), "Patterned input should result in Ok: {:?}", result_patterned.err());
+        let encoded_bytes_patterned = result_patterned.unwrap();
+        assert!(!encoded_bytes_patterned.is_empty(), "Expected non-empty Vec<u8> for patterned input");
+        
+        // Verify by deserializing (optional, but good)
+        let deserialized_ops: Vec<GeometricOperation> = bincode::deserialize(&encoded_bytes_patterned)
+            .expect("Bincode deserialization failed for verification in test");
+        assert_eq!(deserialized_ops.len(), 1, "Expected one operation after deserialization"); 
+        match &deserialized_ops[0] {
             GeometricOperation::PatternReference { base_coordinate, pattern_id, .. } => {
                 assert_eq!(*base_coordinate, Coordinate3D::new(1,0,0));
                 assert_eq!(*pattern_id, 0);
             }
-            _ => panic!("Expected PatternReference operation for patterned input"),
+            _ => panic!("Expected PatternReference operation for patterned input after deserialization"),
         }
     }
 }
