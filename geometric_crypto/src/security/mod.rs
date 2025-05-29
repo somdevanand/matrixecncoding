@@ -5,7 +5,8 @@ pub mod obfuscation;
 pub mod integrity;
 pub mod key_exchange;
 pub mod layer;
-// pub mod common; // Or define common types directly here
+pub mod key_manager; 
+pub mod audit; // Added line
 
 // Common error type for the security module
 #[derive(Debug, thiserror::Error)]
@@ -38,6 +39,8 @@ pub struct IntegrityProof(pub Vec<u8>); // A simple proof based on a byte vector
 // Re-export key public types for easier access from outside the security module,
 // e.g., crate::security::SecurityLayer instead of crate::security::layer::SecurityLayer.
 pub use layer::SecurityLayer;
+pub use key_manager::KeyManager; 
+pub use audit::log_security_event; // Added line
 // CoordinateObfuscator and IntegrityVerifier are typically used internally by SecurityLayer,
 // but can be re-exported if direct access is desired. For now, keep them internal to SecurityLayer's usage.
 // pub use obfuscation::CoordinateObfuscator;
