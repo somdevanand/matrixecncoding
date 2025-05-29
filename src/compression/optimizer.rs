@@ -79,9 +79,32 @@ impl OperationOptimizer {
                             pattern_id: 0, // Placeholder ID
                             transformation_matrix: Matrix3x3::identity(),
                         });
-                        for idx_to_cover in pattern_instance_indices_to_cover {
-                            covered_indices.insert(idx_to_cover);
+                        // Mark the first occurrence as covered
+                        for idx_to_cover in &pattern_instance_indices_to_cover {
+                            covered_indices.insert(*idx_to_cover);
                         }
+
+                        // *** NEW LOGIC: Mark subsequent contiguous occurrences as covered ***
+                        let mut current_check_idx = start_idx + pattern_len;
+                        while current_check_idx + pattern_len <= coords.len() {
+                            let mut is_contiguous_repetition = true;
+                            for i in 0..pattern_len {
+                                if covered_indices.contains(&(current_check_idx + i)) || coords[current_check_idx + i] != pattern_candidate.coordinates[i] {
+                                    is_contiguous_repetition = false;
+                                    break;
+                                }
+                            }
+                            if is_contiguous_repetition {
+                                // Mark this contiguous occurrence as covered
+                                for i in 0..pattern_len {
+                                    covered_indices.insert(current_check_idx + i);
+                                }
+                                current_check_idx += pattern_len;
+                            } else {
+                                break; // Not a contiguous repetition or already covered
+                            }
+                        }
+                        // *** END NEW LOGIC ***
                     }
                 }
             }

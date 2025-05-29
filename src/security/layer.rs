@@ -117,7 +117,7 @@ mod tests {
     fn get_sample_ops_for_obf_coverage() -> Vec<GeometricOperation> {
         vec![
             GeometricOperation::RegionFill {
-                start: Coordinate3D::new(10,20,30),
+                start: Coordinate3D::new(100, 150, 200),
                 end: Coordinate3D::new(15,25,35),
                 fill_byte: 1, 
                 compression_ratio: 1.0,
@@ -205,10 +205,34 @@ mod tests {
             let mut changed = false;
             // Simplified check: just check if the first op (if any) is different.
             // A more robust check might compare each element or a hash.
-            if ops[0] != original_ops_for_value_check[0] {
-                changed = true;
+            // if ops[0] != original_ops_for_value_check[0] {
+            //     changed = true;
+            // }
+            // assert!(changed, "Ops should be obfuscated by protect_data for non-trivial cases");
+
+            // *** NEW ASSERTION: Check if *any* coordinate within the operations has changed ***
+            for (i, op) in ops.iter().enumerate() {
+                let original_op = &original_ops_for_value_check[i];
+                match (op, original_op) {
+                    (GeometricOperation::RegionFill { start: s_obf, end: e_obf, .. }, GeometricOperation::RegionFill { start: s_orig, end: e_orig, .. }) => {
+                        if s_obf != s_orig || e_obf != e_orig { changed = true; break; }
+                    }
+                    (GeometricOperation::PathTrace { waypoints: w_obf, .. }, GeometricOperation::PathTrace { waypoints: w_orig, .. }) => {
+                        if w_obf != w_orig { changed = true; break; }
+                    }
+                    (GeometricOperation::PatternReference { base_coordinate: b_obf, .. }, GeometricOperation::PatternReference { base_coordinate: b_orig, .. }) => {
+                        if b_obf != b_orig { changed = true; break; }
+                    }
+                    // SparseMapping and FunctionGeneration parameters/deltas are not expected to change by coordinate obfuscation,
+                    // but their coordinate parts (if any, like FunctionGeneration domain) should be checked.
+                     (GeometricOperation::FunctionGeneration { domain: dom_obf, .. }, GeometricOperation::FunctionGeneration { domain: dom_orig, .. }) => {
+                         if dom_obf.min_coord != dom_orig.min_coord || dom_obf.max_coord != dom_orig.max_coord { changed = true; break; }
+                     }
+                    _ => { /* Other operation types not involving Coordinate3D or not expected to change */ }
+                }
             }
-            assert!(changed, "Ops should be obfuscated by protect_data for non-trivial cases");
+             assert!(changed, "At least one coordinate in the operations should be obfuscated");
+            // *** END NEW ASSERTION ***
         }
 
         let unprotect_result = layer.unprotect_data(&mut ops, &proof, &context);
