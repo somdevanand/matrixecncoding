@@ -33,6 +33,11 @@ impl<T: Default> ObjectPool<T> {
         // Optional: Could check if pool is over capacity and drop item.
         self.items.push(item);
     }
+
+    /// Returns the total capacity of the internal Vec<T>.
+    pub fn main_buffer_capacity(&self) -> usize {
+        self.items.capacity()
+    }
 }
 
 /// Key for caching GeometricOperations.
@@ -54,9 +59,11 @@ impl OperationKey {
 
 #[derive(Debug)] // LruCache and VecDeque are Debug
 pub struct MemoryOptimizer {
-    pub coordinate_pool: ObjectPool<Coordinate3D>, // Made pub for potential direct use/testing
+    pub coordinate_pool: ObjectPool<Coordinate3D>, 
     pub operation_cache: LruCache<OperationKey, GeometricOperation>,
-    pub streaming_buffer: VecDeque<u8>, // Using VecDeque as a RingBuffer
+    pub streaming_buffer: VecDeque<u8>, 
+    op_cache_hits: u64,
+    op_cache_misses: u64,
 }
 
 impl MemoryOptimizer {
@@ -65,6 +72,8 @@ impl MemoryOptimizer {
             coordinate_pool: ObjectPool::new(coord_pool_capacity),
             operation_cache: LruCache::new(op_cache_capacity),
             streaming_buffer: VecDeque::with_capacity(buffer_capacity),
+            op_cache_hits: 0,
+            op_cache_misses: 0,
         }
     }
 
@@ -114,41 +123,104 @@ impl MemoryOptimizer {
        results
    }
 
+    // Method to get an operation from the cache, tracking hits/misses.
+    // Returns a clone of the operation if found, to avoid lifetime issues with LruCache internal refs.
+    // Consider returning Option<&GeometricOperation> if caller can handle lifetimes or if ops are large.
+    // For simplicity now, returning a clone.
+    pub fn get_from_op_cache(&mut self, key: &OperationKey) -> Option<GeometricOperation> {
+        if let Some(op) = self.operation_cache.get(key) {
+            self.op_cache_hits += 1;
+            Some(op.clone()) // Return a clone
+        } else {
+            self.op_cache_misses += 1;
+            None
+        }
+    }
+
+    // Method to put an operation into the cache.
+    // The LruCache put itself might evict an old item, which is returned as Option<V> (the evicted value).
+    // This method just wraps the put.
+    pub fn put_in_op_cache(&mut self, key: OperationKey, op: GeometricOperation) -> Option<GeometricOperation> {
+        self.operation_cache.put(key, op)
+    }
+
    pub fn profile_memory_usage(&self) -> MemoryProfile {
-       // TODO: Implement actual memory profiling.
-       // - Measure heap_usage: could use external crates or estimate based on collection sizes.
-       // - Calculate cache_efficiency: (hits / (hits + misses)) for operation_cache.
-       //   LruCache provides hits() and misses() methods, but they are not public.
-       //   A wrapper around LruCache might be needed to track this, or use len() / cap().
-       // - Analyze memory_fragmentation (very complex, likely a placeholder).
-
        let op_cache_len = self.operation_cache.len();
-       let op_cache_cap = self.operation_cache.cap().get(); // NonZeroUsize -> usize
-       let cache_eff = if op_cache_cap > 0 { op_cache_len as f64 / op_cache_cap as f64 } else { 0.0 };
+       // let op_cache_cap = self.operation_cache.cap().get(); // Not used for efficiency calculation with hits/misses
 
+       let total_op_cache_accesses = self.op_cache_hits + self.op_cache_misses;
+       let cache_efficiency = if total_op_cache_accesses > 0 {
+           self.op_cache_hits as f64 / total_op_cache_accesses as f64
+       } else {
+           0.0 // No accesses yet, efficiency is undefined or 0
+       };
+
+       // Calculate individual component sizes
+       let streaming_buffer_content_bytes = self.streaming_buffer.capacity() * std::mem::size_of::<u8>();
+       let coordinate_pool_content_bytes = self.coordinate_pool.main_buffer_capacity() * std::mem::size_of::<Coordinate3D>();
+       
+       let mut operation_cache_content_bytes = 0;
+       for (key, op) in self.operation_cache.iter() {
+           operation_cache_content_bytes += key.0.len(); // Size of Vec<u8> in OperationKey
+           operation_cache_content_bytes += std::mem::size_of_val(op); // Size of GeometricOperation enum
+            // Note: std::mem::size_of_val(op) for enums can be tricky. It gives the size of the enum discriminant
+            // plus the size of the largest variant's data if enums are not stored packed.
+            // For more precise heap usage of ops (e.g. Vecs inside ops), deep serialization or specific sizing needed.
+            // This is a common estimation challenge. For now, this is better than just op_cache_len * average.
+       }
+
+       let heap_usage_bytes = streaming_buffer_content_bytes + 
+                              coordinate_pool_content_bytes + 
+                              operation_cache_content_bytes +
+                              std::mem::size_of_val(&self.operation_cache); // Add overhead of LruCache itself
 
        MemoryProfile {
-           heap_usage: std::mem::size_of_val(&self.coordinate_pool.items) +
-                       std::mem::size_of_val(&self.operation_cache) + // Size of LruCache struct itself
-                       op_cache_len * (std::mem::size_of::<OperationKey>() + std::mem::size_of::<GeometricOperation>()) + // Approx size of elements
-                       self.streaming_buffer.capacity() * std::mem::size_of::<u8>(), // Approx size of buffer
-           cache_efficiency: cache_eff, // Using fullness as a proxy for efficiency for now
-           memory_fragmentation: 0.0, // Placeholder
+           heap_usage_bytes,
+           cache_efficiency, 
+           memory_fragmentation: 0.0, // Still a placeholder
+           op_cache_hits: self.op_cache_hits,
+           op_cache_misses: self.op_cache_misses,
+           streaming_buffer_content_bytes,
+           coordinate_pool_content_bytes,
+           operation_cache_content_bytes,
        }
    }
 }
 
 /// Placeholder for memory usage profiling data.
-#[derive(Debug, Default, Clone, Copy, PartialEq)] // Added derives for MemoryProfile
+#[derive(Debug, Default, Clone, Copy, PartialEq)] 
 pub struct MemoryProfile {
-    pub heap_usage: usize,        // Estimated or actual heap used by optimizer's structures
-    pub cache_efficiency: f64,  // E.g., hit_ratio for operation_cache
-    pub memory_fragmentation: f32,// Placeholder, harder to measure simply
+    pub heap_usage_bytes: usize, // Renamed
+    pub cache_efficiency: f64, 
+    pub memory_fragmentation: f32,
+    pub op_cache_hits: u64,
+    pub op_cache_misses: u64,
+    pub streaming_buffer_content_bytes: usize, // New
+    pub coordinate_pool_content_bytes: usize,  // New
+    pub operation_cache_content_bytes: usize,   // New
 }
 
-impl MemoryProfile { // Added a simple constructor for easier testing
-    pub fn new(heap_usage: usize, cache_efficiency: f64, memory_fragmentation: f32) -> Self {
-        Self { heap_usage, cache_efficiency, memory_fragmentation }
+impl MemoryProfile { 
+    pub fn new(
+        heap_usage_bytes: usize, 
+        cache_efficiency: f64, 
+        memory_fragmentation: f32, 
+        op_cache_hits: u64, 
+        op_cache_misses: u64,
+        streaming_buffer_content_bytes: usize,
+        coordinate_pool_content_bytes: usize,
+        operation_cache_content_bytes: usize,
+    ) -> Self {
+        Self { 
+            heap_usage_bytes, 
+            cache_efficiency, 
+            memory_fragmentation, 
+            op_cache_hits, 
+            op_cache_misses,
+            streaming_buffer_content_bytes,
+            coordinate_pool_content_bytes,
+            operation_cache_content_bytes,
+        }
     }
 }
 
@@ -156,14 +228,15 @@ impl MemoryProfile { // Added a simple constructor for easier testing
 mod tests {
     use super::*;
     use crate::core::coordinates::Coordinate3D;
-    use crate::compression::operations::{GeometricOperation, InterpolationType, EncodingScheme, CoordinateDelta, CompressedValues};
+    use crate::compression::operations::{GeometricOperation, InterpolationType, EncodingScheme, CoordinateDelta, CompressedValues, Matrix3x3};
     use std::io::Cursor; 
 
 
     #[test]
     fn test_object_pool_basic() {
         let mut pool = ObjectPool::<Coordinate3D>::new(5);
-        assert_eq!(pool.items.len(), 5);
+        assert_eq!(pool.items.capacity(), 5); // Check capacity set by new()
+        assert_eq!(pool.main_buffer_capacity(), 5); // Check new method
 
         let c1 = pool.get();
         assert_eq!(c1, Coordinate3D::default()); // Assuming T::default() behavior
@@ -232,36 +305,98 @@ mod tests {
     // }
 
     #[test]
-    fn test_profile_memory_usage_stub() {
-        let mut optimizer = MemoryOptimizer::new(NonZeroUsize::new(10).unwrap(), 1024, 10); // mut for cache modification
-        let profile_initial = optimizer.profile_memory_usage();
+    fn test_profile_memory_usage_detailed() {
+        let op_cache_cap = NonZeroUsize::new(10).unwrap();
+        let buffer_cap_bytes = 1024; // streaming_buffer capacity in bytes
+        let coord_pool_cap_items = 10; // coordinate_pool capacity in items
 
-        // Basic checks for placeholder values or rough estimates
-        assert!(profile_initial.heap_usage > 0); // Should have some size
-        assert_eq!(profile_initial.cache_efficiency, 0.0); // Initially empty cache
-        assert_eq!(profile_initial.memory_fragmentation, 0.0); // Placeholder
+        let mut optimizer = MemoryOptimizer::new(op_cache_cap, buffer_cap_bytes, coord_pool_cap_items);
         
-        // Add an item to cache to check efficiency calculation change
-        let op = GeometricOperation::RegionFill { 
-            start: Coordinate3D::default(), end: Coordinate3D::default(), fill_byte: 0, compression_ratio: 0.0
-        };
-        let key = OperationKey::new(&op).unwrap();
-        optimizer.operation_cache.put(key, op); // Modify cache
+        // Expected initial sizes based on capacity
+        let expected_streaming_buffer_bytes = buffer_cap_bytes * std::mem::size_of::<u8>();
+        let expected_coord_pool_bytes = coord_pool_cap_items * std::mem::size_of::<Coordinate3D>();
         
-        let profile_after_put = optimizer.profile_memory_usage();
-        assert!(profile_after_put.cache_efficiency > 0.0, "Cache efficiency should increase after put");
-        assert_eq!(profile_after_put.cache_efficiency, 1.0 / 10.0, "Cache efficiency for 1 item in cap 10");
+        // Add one item to cache
+        let op1 = GeometricOperation::PathTrace { waypoints: vec![Coordinate3D::new(1,1,1)], interpolation: InterpolationType::None, data_encoding: EncodingScheme::Raw };
+        let key1_data = bincode::serialize(&op1).unwrap();
+        let key1 = OperationKey(key1_data.clone());
+        optimizer.put_in_op_cache(key1.clone(), op1.clone());
+        
+        let expected_op_cache_bytes = key1_data.len() + std::mem::size_of_val(&op1) + std::mem::size_of_val(&optimizer.operation_cache);
+
+
+        let profile1 = optimizer.profile_memory_usage();
+        assert_eq!(profile1.streaming_buffer_content_bytes, expected_streaming_buffer_bytes);
+        assert_eq!(profile1.coordinate_pool_content_bytes, expected_coord_pool_bytes);
+        assert_eq!(profile1.operation_cache_content_bytes + std::mem::size_of_val(&optimizer.operation_cache), expected_op_cache_bytes, "Operation cache content size mismatch");
+        assert_eq!(profile1.heap_usage_bytes, expected_streaming_buffer_bytes + expected_coord_pool_bytes + expected_op_cache_bytes);
+
+        assert_eq!(profile1.op_cache_hits, 0);
+        assert_eq!(profile1.op_cache_misses, 0);
+        assert_eq!(profile1.cache_efficiency, 0.0);
+
+        // Access present item (hit)
+        let _ = optimizer.get_from_op_cache(&key1);
+        let profile2 = optimizer.profile_memory_usage();
+        assert_eq!(profile2.op_cache_hits, 1);
+        assert_eq!(profile2.op_cache_misses, 0);
+        assert!((profile2.cache_efficiency - 1.0).abs() < f64::EPSILON);
+        assert_eq!(profile2.heap_usage_bytes, profile1.heap_usage_bytes); // Heap usage should be similar
+
+        // Access non-present item (miss)
+        let op2 = GeometricOperation::RegionFill { start: Default::default(), end: Default::default(), fill_byte:0, compression_ratio:0.0 };
+        let key2 = OperationKey::new(&op2).unwrap();
+        let _ = optimizer.get_from_op_cache(&key2);
+        let profile3 = optimizer.profile_memory_usage();
+        assert_eq!(profile3.op_cache_hits, 1);
+        assert_eq!(profile3.op_cache_misses, 1);
+        assert!((profile3.cache_efficiency - 0.5).abs() < f64::EPSILON); 
     }
     
     #[test]
     fn test_memory_profile_constructor() { 
-        let profile = MemoryProfile::new(100, 0.9, 0.1);
-        assert_eq!(profile.heap_usage, 100);
+        let profile = MemoryProfile::new(100, 0.9, 0.1, 9, 1, 20, 30, 50);
+        assert_eq!(profile.heap_usage_bytes, 100);
         assert!((profile.cache_efficiency - 0.9).abs() < f64::EPSILON);
         assert!((profile.memory_fragmentation - 0.1).abs() < f32::EPSILON);
     }
 
     // New tests for the implemented process_streaming_data
+    // And new tests for cache hit/miss tracking
+
+    #[test]
+    fn op_cache_hit_miss_tracking() {
+        let mut optimizer = MemoryOptimizer::new(NonZeroUsize::new(5).unwrap(), 256, 5);
+        let op1 = GeometricOperation::PathTrace { waypoints: vec![Coordinate3D::new(1,2,3)], interpolation: InterpolationType::None, data_encoding: EncodingScheme::Raw };
+        let key1 = OperationKey::new(&op1).unwrap();
+        
+        // Miss
+        assert!(optimizer.get_from_op_cache(&key1).is_none());
+        assert_eq!(optimizer.op_cache_misses, 1);
+        assert_eq!(optimizer.op_cache_hits, 0);
+
+        // Put
+        optimizer.put_in_op_cache(key1.clone(), op1.clone());
+
+        // Hit
+        assert!(optimizer.get_from_op_cache(&key1).is_some());
+        assert_eq!(optimizer.op_cache_misses, 1);
+        assert_eq!(optimizer.op_cache_hits, 1);
+
+        // Another Hit
+        assert!(optimizer.get_from_op_cache(&key1).is_some());
+        assert_eq!(optimizer.op_cache_misses, 1);
+        assert_eq!(optimizer.op_cache_hits, 2);
+
+        // New key, Miss
+        let op2 = GeometricOperation::RegionFill { start: Coordinate3D::new(0,0,0), end: Coordinate3D::new(1,1,1), fill_byte:0, compression_ratio: 1.0 };
+        let key2 = OperationKey::new(&op2).unwrap();
+        assert!(optimizer.get_from_op_cache(&key2).is_none());
+        assert_eq!(optimizer.op_cache_misses, 2);
+        assert_eq!(optimizer.op_cache_hits, 2);
+    }
+
+
     #[test]
     fn process_empty_buffer() {
         let mut optimizer = MemoryOptimizer::new(NonZeroUsize::new(10).unwrap(), 1024, 5);

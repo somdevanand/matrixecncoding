@@ -286,12 +286,7 @@ mod tests {
         let mut frames = frame_data(&payload, chunk_size).unwrap();
         frames.remove(2); // Remove chunk_id 1 (frames[0]=H, frames[1]=C0, frames[2]=C1, frames[3]=C2, frames[4]=F)
         let result = deframe_data(frames);
-        assert!(result.is_err());
-        // assert!(matches!(result, Err(NetworkError::InvalidFormat(s)) if
-        //     s.contains("Missing chunk_id: 1")));
-        // The actual error when a chunk is missing will be a chunk count mismatch
-        assert!(matches!(result, Err(NetworkError::InvalidFormat(s)) if
-            s.contains("Chunk count mismatch")));
+        assert!(matches!(result, Err(NetworkError::InvalidFormat(s)) if s.contains("Missing chunk_id: 1")) );
     }
     
     #[test]

@@ -9,11 +9,15 @@ use crate::network::PROTOCOL_VERSION; // Added
 use crate::compression::operations::GeometricOperation; // Added for encrypt/decrypt type hints
 
 
+use crate::core::parallel_processor::ParallelConfig; // Added
+
 #[derive(Debug, Clone)] 
 pub struct SystemConfiguration {
     pub core_config: CoreEngineConfig,
     pub compression_level: CompressionLevel, 
-    pub security_level: SecurityLevel,     
+    pub security_level: SecurityLevel,
+    pub parallel_pattern_analysis_enabled: bool, // New
+    pub parallel_config: ParallelConfig,        // New, contains num_threads and coord_gen_chunk_size
 }
 
 impl Default for SystemConfiguration { 
@@ -22,6 +26,8 @@ impl Default for SystemConfiguration {
             core_config: CoreEngineConfig::default(),
             compression_level: CompressionLevel::Balanced,
             security_level: SecurityLevel::Standard,
+            parallel_pattern_analysis_enabled: cfg!(feature = "parallel"), // Enable if feature is compiled
+            parallel_config: ParallelConfig::default(),
         }
     }
 }
@@ -64,12 +70,16 @@ pub enum GeometricCryptoError {
 }
 
 
+use crate::core::memory_optimizer::MemoryOptimizer; // Added
+use std::num::NonZeroUsize; // Added for MemoryOptimizer::new
+
 // Removed Debug because CoreEngine no longer derives Debug.
 pub struct GeometricCryptoSystem {
     core_engine: CoreEngine,
-    compression_engine: CompressionEngine, // CompressionEngine still derives Debug
+    compression_engine: CompressionEngine, 
     security_layer: SecurityLayer,
     network_layer: NetworkLayer,
+    memory_optimizer: MemoryOptimizer, // New field
     config: SystemConfiguration,
 }
 
@@ -77,18 +87,31 @@ impl GeometricCryptoSystem {
     pub fn new(config: SystemConfiguration, initial_key: [u8; 32]) -> Result<Self, GeometricCryptoError> {
         let core_engine = CoreEngine::new(initial_key, config.core_config)?;
         
-        let compression_engine = CompressionEngine::new(); 
-        
+        #[cfg(feature = "parallel")]
+        let compression_engine = CompressionEngine::new(
+            config.parallel_pattern_analysis_enabled,
+            Some(config.parallel_config) // Pass the ParallelConfig from SystemConfiguration
+        );
+        #[cfg(not(feature = "parallel"))]
+        let compression_engine = CompressionEngine::new(); // Original constructor if "parallel" feature is off
+
         let mut security_layer = SecurityLayer::new();
         security_layer.set_master_key(initial_key)?; 
-
         let network_layer = NetworkLayer::new();
+        
+        // Initialize MemoryOptimizer with default/configurable values
+        // TODO: Make these capacities configurable via SystemConfiguration or a new OptimizerConfig
+        let op_cache_capacity = NonZeroUsize::new(1000).ok_or_else(|| GeometricCryptoError::InitializationError("Invalid op_cache_capacity".to_string()))?;
+        let buffer_capacity = 1024 * 1024; // 1MB
+        let coord_pool_capacity = 2048;    // Pool for 2048 Coordinate3D objects
+        let memory_optimizer = MemoryOptimizer::new(op_cache_capacity, buffer_capacity, coord_pool_capacity);
 
         Ok(Self {
             core_engine,
             compression_engine,
             security_layer,
             network_layer,
+            memory_optimizer, // Initialize new field
             config,
         })
     }
@@ -127,7 +150,7 @@ impl GeometricCryptoSystem {
         Ok(packaged_data)
     }
 
-    pub fn decrypt(&self, encrypted_payload: &[u8]) -> Result<Vec<u8>, GeometricCryptoError> {
+    pub fn decrypt(&mut self, encrypted_payload: &[u8]) -> Result<Vec<u8>, GeometricCryptoError> { // Changed to &mut self
         if !self.security_layer.key_manager.is_key_set() {
             return Err(GeometricCryptoError::KeyNotSet);
         }
@@ -147,7 +170,8 @@ impl GeometricCryptoSystem {
         let security_context = SecurityContext::default(); 
         self.security_layer.unprotect_data(&mut operations, &proof, &security_context)?;
         
-        let coords = self.compression_engine.decompress_operations(&operations)?;
+        // Pass mutable reference to memory_optimizer
+        let coords = self.compression_engine.decompress_operations(&operations, &mut self.memory_optimizer)?;
         
         let bytes = self.core_engine.coordinates_to_bytes(&coords)
             .map_err(|e| GeometricCryptoError::CoreError(CoreCryptoError::MappingGenerationFailed(format!("Coord to bytes failed: {}",e))))?;
@@ -194,7 +218,7 @@ mod tests {
     fn test_encrypt_decrypt_basic_roundtrip() {
         let config = SystemConfiguration::default();
         let key = [65u8; 32]; // 'A'
-        let system = GeometricCryptoSystem::new(config, key).expect("System creation failed"); // Removed mut
+        let mut system = GeometricCryptoSystem::new(config, key).expect("System creation failed"); // Made system mutable
 
         let data_str = "Hello, Geometric World!";
         let data = data_str.as_bytes();
@@ -216,10 +240,10 @@ mod tests {
     fn test_encrypt_decrypt_empty_data() {
         let config = SystemConfiguration::default();
         let key = [66u8; 32]; // 'B'
-        let system = GeometricCryptoSystem::new(config, key).expect("System creation failed"); // Removed mut
+        let mut system = GeometricCryptoSystem::new(config, key).expect("System creation failed"); // Made system mutable
 
         let data: Vec<u8> = Vec::new();
-        let encrypted_result = system.encrypt(&data);
+        let encrypted_result = system.encrypt(&data); // encrypt still takes &self
         assert!(encrypted_result.is_ok(), "Encryption of empty data failed: {:?}", encrypted_result.err());
         let encrypted_data = encrypted_result.unwrap();
         assert!(!encrypted_data.is_empty(), "Encrypted empty data should not be empty (due to headers/structure)");
