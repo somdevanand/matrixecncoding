@@ -111,6 +111,10 @@ impl GeometricMatrix {
         //    The `add` method of Coordinate3D already handles wrapping.
         base_coord.add(offset_coord)
     }
+
+    pub fn get_byte_for_coord(&self, coord: &Coordinate3D) -> Option<u8> {
+        self.coord_to_byte_map.get(coord).copied()
+    }
 }
 
 // Placeholder for module structure - this will be handled by lib.rs or main.rs later
