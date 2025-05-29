@@ -69,12 +69,18 @@ impl PatternAnalyzer {
         Ok(candidates)
     }
 
-    /// Performs spatial clustering analysis on coordinates. (Remains async stub)
-    pub async fn spatial_clustering(
+    /// Performs spatial clustering analysis on coordinates. (Synchronous Stub)
+    /// Returns each coordinate as its own cluster.
+    pub fn spatial_clustering(
         &self,
-        _coords: &[Coordinate3D],
+        coords: &[Coordinate3D],
     ) -> Result<Vec<Vec<Coordinate3D>>, CompressionError> {
-        Err(CompressionError::NotImplemented)
+        if coords.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Basic stub: each coordinate is its own cluster
+        let clusters = coords.iter().map(|c| vec![*c]).collect();
+        Ok(clusters)
     }
 }
 
@@ -154,11 +160,24 @@ mod tests {
         assert!(result.unwrap().is_empty(), "Should handle window larger than coords");
     }
     
-    #[tokio::test]
-    async fn test_spatial_clustering_stub() { // This test remains async as the method is async
+    // Updated test for spatial_clustering (non-async)
+    #[test]
+    fn test_spatial_clustering_stub_sync() {
         let analyzer = PatternAnalyzer::new();
-        let coords = vec![Coordinate3D::new(0,0,0)];
-        let result = analyzer.spatial_clustering(&coords).await;
-        assert!(matches!(result, Err(CompressionError::NotImplemented)));
+        let coords = vec![
+            Coordinate3D::new(1,1,1),
+            Coordinate3D::new(2,2,2),
+        ];
+        let result = analyzer.spatial_clustering(&coords);
+        assert!(result.is_ok());
+        let clusters = result.unwrap();
+        assert_eq!(clusters.len(), 2); // Each coord is its own cluster
+        assert_eq!(clusters[0], vec![Coordinate3D::new(1,1,1)]);
+        assert_eq!(clusters[1], vec![Coordinate3D::new(2,2,2)]);
+
+        let empty_coords: Vec<Coordinate3D> = Vec::new();
+        let result_empty = analyzer.spatial_clustering(&empty_coords);
+        assert!(result_empty.is_ok());
+        assert!(result_empty.unwrap().is_empty());
     }
 }

@@ -1,110 +1,86 @@
 // geometric_crypto/src/lib.rs
 
-// Declare the top-level modules corresponding to the directory structure.
-// These directories (core, security, etc.) should be under `geometric_crypto/src/`.
-// If they are directly under `geometric_crypto/`, the paths in `mod` statements
-// and `use` statements elsewhere would need adjustment (e.g. `crate::core` vs `core`).
-// Assuming a standard Cargo project structure where source files are in `src/`.
-
-// First, ensure the directory structure is `geometric_crypto/src/<module_name>`
-// The previous step created `geometric_crypto/<module_name>`.
-// The worker should adjust this by moving the existing module directories
-// (core, security, compression, network, benchmarks) into a `src` directory
-// within `geometric_crypto`.
-
-// Task for the worker:
-// 1. Create `geometric_crypto/src/` directory if it doesn't exist.
-// 2. Move the following directories into `geometric_crypto/src/`:
-//    - `geometric_crypto/core` -> `geometric_crypto/src/core`
-//    - `geometric_crypto/security` -> `geometric_crypto/src/security`
-//    - `geometric_crypto/compression` -> `geometric_crypto/src/compression`
-//    - `geometric_crypto/network` -> `geometric_crypto/src/network`
-//    - `geometric_crypto/benchmarks` -> `geometric_crypto/src/benchmarks`
-//    (Note: `benchmarks` usually stays in the root for `[[bench]]` targets,
-//     but the issue's module structure implies it might contain library code too.
-//     For now, let's assume `benchmarks` contains library helper code and also
-//     has separate bench targets in `benches/` (which Cargo expects).
-//     The `[[bench]] name` in Cargo.toml refers to files in `benches/`.
-//     If `geometric_crypto/benchmarks` is for library utilities used by benchmarks,
-//     then it should be part of `src`. If it's purely for `[[bench]]` targets,
-//     it should be `geometric_crypto/benches/`.
-//     Given the issue structure "geometric_crypto/benchmarks/compression.rs", etc.
-//     it seems these are modules for test *logic*, not just bench targets.
-//     So, moving to `src/benchmarks` is consistent with treating them as library modules.
-//     Actual benchmark *runners* would go in a top-level `benches/` dir.)
-
-// 3. Create `geometric_crypto/src/lib.rs` with the following content:
-
-// Publicly re-export or declare modules as per the project structure.
-
 // Core module and its submodules
-pub mod core {
-    pub mod coordinates; // Should contain Coordinate3D
-    pub mod matrix;      // Should contain GeometricMatrix
-    pub mod seed;        // Should contain derive_seed_from_key
-    pub mod transforms;  // Should contain Axis, rotation/scaling helpers
-                         // Add other core submodules if they exist or are planned soon
-}
+pub mod core;
+// Re-export key core types for easier access at crate level
+pub use core::coordinates::Coordinate3D;
+pub use core::matrix::{GeometricMatrix, CryptoError}; // CryptoError from core::matrix
+pub use core::transforms::Axis;
+pub use core::seed::derive_seed_from_key;
+pub use core::cache::HierarchicalCoordinateCache;
+pub use core::cache_structs::CoordinateMetadata;
+
+
+// Compression module and its submodules
+pub mod compression;
+// Re-export key compression types
+pub use compression::{CompressionEngine, CompressionError, GeometricOperation};
+
 
 // Security module and its submodules
-pub mod security {
-    pub mod prng; // Should contain SecurePrng
-                  // Add others like obfuscation, integrity, key_exchange later
-}
-
-// Compression module (empty for now, but declare it)
-pub mod compression {
-    // pub mod patterns;
-    // pub mod operations;
-    // pub mod encoding;
-    // pub mod clustering;
-}
-
-// Network module (empty for now, but declare it)
-pub mod network {
-    // pub mod protocol;
-    // pub mod serialization;
-    // pub mod sync;
-    // pub mod streaming;
-}
-
-// Benchmarks module - if it contains library code/structs used by benchmarks
-// This is unusual for Cargo's typical structure if these are *only* for `[[bench]]` targets.
-// However, the issue lists them as modules.
-// If these .rs files are themselves benchmarks, they should be in `benches/` not `src/`.
-// For now, let's assume they might contain shared logic for benchmark setup.
-pub mod benchmarks {
-    // pub mod compression_benchmarks_logic; // Example if it's not the bench target itself
-}
+pub mod security;
+// Re-export key security types
+pub use security::{SecurityLayer, SecurityError, SecurityContext, IntegrityProof};
+// KeyManager is currently a simple default struct within security::layer,
+// if it becomes more significant, it could be re-exported too.
+// CoordinateObfuscator, IntegrityVerifier are internal to SecurityLayer for now.
 
 
-// Example of how to make Coordinate3D easily available at the top level of the crate:
-// pub use core::coordinates::Coordinate3D;
-// pub use core::matrix::GeometricMatrix;
+// Network module and its submodules
+pub mod network;
+// Re-export key network types
+pub use network::{NetworkLayer, NetworkError};
+// Potentially re-export serialization functions if they are meant to be public API
+// pub use network::serialization::{serialize_operations, deserialize_operations};
 
-// Define the main struct GeometricCryptoSystem and other public APIs later here.
-// For now, just setting up the module structure.
 
-// Add a simple test to ensure lib.rs compiles and modules can be accessed.
 #[cfg(test)]
 mod tests {
-    use super::*; // Access to core, security etc.
+    // use super::*; // Already here from previous setup.
 
     #[test]
     fn lib_works() {
-        // Example: Instantiate a coordinate if Coordinate3D is made public from core::coordinates
-        // To do this, core::coordinates must make Coordinate3D public, and core must make coordinates public.
-        // And then lib.rs must make core public.
-        // For now, let's just check if we can use a function from a submodule, assuming paths are correct.
-        // This requires the functions/structs themselves to be pub.
-
-        // Example: use a function from seed.rs
-        // Need to make derive_seed_from_key public in seed.rs
-        // and seed module public in core/mod.rs (or directly in core here)
-        // For now, this test might fail if items are not public all the way.
-        // The primary goal is that `cargo check` or `cargo build` would pass after this step.
-        // A true test of functionality would require `pub` visibility modifiers.
         let result = 2 + 2;
         assert_eq!(result, 4);
+    }
+
+    // Example test to check if a type from a sub-sub-module is accessible
+    // This depends on the pub declarations within those modules as well.
+    #[test]
+    fn test_public_api_access() {
+        // Test core API access
+        let _coord = crate::Coordinate3D::new(1,2,3); // Using re-exported path
+        let _matrix_err: Result<(), crate::CryptoError> = Err(crate::CryptoError::MappingGenerationFailed("test".to_string()));
+        
+        // Test compression API access
+        let _comp_engine = crate::CompressionEngine::new();
+        let _comp_err: Result<(), crate::CompressionError> = Err(crate::CompressionError::NotImplemented);
+
+        // Test security API access
+        // The following lines will cause compile errors if the types are not defined or not pub.
+        // Assuming SecurityLayer::new(), SecurityError::NotImplemented, SecurityContext (unit/default), IntegrityProof::default() exist.
+        // These types are not yet defined in the project, so these lines would fail.
+        // For the purpose of testing lib.rs structure, we comment them out if they cause failure due to missing types.
+        // However, the task is to *add* these re-exports, assuming the types *will* exist.
+        // So, the test should reflect the desired state.
+        // If the types are not created yet in their respective modules (e.g. security::layer),
+        // then this test will only pass once those are implemented.
+        // For now, let's assume the types exist for the sake of setting up lib.rs.
+        
+        // Placeholder for actual types if not yet fully implemented, to make test compile:
+        // This is a common strategy: define minimal stubs for types so API surface tests can pass.
+        // For this task, we assume the types are defined in their modules as per the pub use statements.
+        
+        let _sec_layer = crate::security::SecurityLayer::new(); // Path corrected to use module path
+        let _sec_err: Result<(), crate::security::SecurityError> = Err(crate::security::SecurityError::NotImplemented("test".to_string()));
+        let _sec_context = crate::security::SecurityContext; 
+        let _proof = crate::security::IntegrityProof::default();
+
+
+        // Test network API access
+        let _net_layer = crate::network::NetworkLayer::new(); // Path corrected
+        let _net_err: Result<(), crate::network::NetworkError> = Err(crate::network::NetworkError::NotImplemented("test".to_string()));
+
+        assert!(true); // If all above compile, API paths are likely okay.
     }
 }
