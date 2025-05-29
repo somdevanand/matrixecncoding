@@ -25,11 +25,82 @@ impl Coordinate3D {
             z: self.z.wrapping_sub(other.z),
         }
     }
+
+    /// Rotates the coordinate around a given axis by a specified angle in degrees.
+    /// The center of rotation is assumed to be (0,0,0) for simplicity in this context.
+    /// Calculations are done using f32 and results are clamped back to u8.
+    pub fn rotate(self, axis: super::transforms::Axis, angle_degrees: f32) -> Self {
+        let rad = super::transforms::degrees_to_radians(angle_degrees);
+        let cos_a = rad.cos();
+        let sin_a = rad.sin();
+
+        let x = self.x as f32;
+        let y = self.y as f32;
+        let z = self.z as f32;
+
+        let (nx, ny, nz) = match axis {
+            super::transforms::Axis::X => (
+                // x' = x
+                // y' = y*cos(a) - z*sin(a)
+                // z' = y*sin(a) + z*cos(a)
+                x,
+                y * cos_a - z * sin_a,
+                y * sin_a + z * cos_a,
+            ),
+            super::transforms::Axis::Y => (
+                // x' = x*cos(a) + z*sin(a)
+                // y' = y
+                // z' = -x*sin(a) + z*cos(a)
+                x * cos_a + z * sin_a,
+                y,
+                -x * sin_a + z * cos_a,
+            ),
+            super::transforms::Axis::Z => (
+                // x' = x*cos(a) - y*sin(a)
+                // y' = x*sin(a) + y*cos(a)
+                // z' = z
+                x * cos_a - y * sin_a,
+                x * sin_a + y * cos_a,
+                z,
+            ),
+        };
+
+        Coordinate3D {
+            x: super::transforms::clamp_to_u8(nx),
+            y: super::transforms::clamp_to_u8(ny),
+            z: super::transforms::clamp_to_u8(nz),
+        }
+    }
+
+    /// Scales the coordinate by a given factor.
+    /// The center of scaling is assumed to be (0,0,0).
+    /// Calculations are done using f32 and results are clamped back to u8.
+    pub fn scale(self, factor: f32) -> Self {
+        if factor < 0.0 {
+            // Or handle error, for now, treat negative factor as 0 to avoid issues.
+            // Or return self, or an error. Clamping to 0 for components.
+             return Coordinate3D {
+                x: super::transforms::clamp_to_u8(self.x as f32 * 0.0),
+                y: super::transforms::clamp_to_u8(self.y as f32 * 0.0),
+                z: super::transforms::clamp_to_u8(self.z as f32 * 0.0),
+            };
+        }
+        Coordinate3D {
+            x: super::transforms::clamp_to_u8(self.x as f32 * factor),
+            y: super::transforms::clamp_to_u8(self.y as f32 * factor),
+            z: super::transforms::clamp_to_u8(self.z as f32 * factor),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*; // Imports Coordinate3D
+    // To test rotate and scale, we would need to make Axis and helpers available here.
+    // For now, these tests will be added in a subsequent step when module linking is addressed.
+    // If geometric_crypto/core/mod.rs existed and declared `pub mod transforms;`,
+    // then `use super::super::transforms::Axis;` might be needed in tests,
+    // or `use crate::core::transforms::Axis;` if lib.rs is set up.
 
     #[test]
     fn test_new_coordinate() {
