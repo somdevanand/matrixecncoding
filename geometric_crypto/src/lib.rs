@@ -76,10 +76,13 @@ mod tests {
         let _mem_opt_config = crate::core::memory_optimizer::MemoryOptimizer::new(std::num::NonZeroUsize::new(1).unwrap(),0,0); // Path for non-reexported type
         let _mem_prof = crate::MemoryProfile::default();
         #[cfg(feature = "parallel")]
-        let _par_proc = crate::ParallelProcessor::new(10);
+        let _par_proc = crate::ParallelProcessor::new(crate::core::parallel_processor::ParallelConfig { num_threads: None, coord_gen_chunk_size: 10 });
 
 
         // Compression API
+        #[cfg(feature = "parallel")]
+        let _comp_engine = crate::CompressionEngine::new(false, None);
+        #[cfg(not(feature = "parallel"))]
         let _comp_engine = crate::CompressionEngine::new();
         let _comp_err: Result<(), crate::CompressionError> = Err(crate::CompressionError::NotImplemented);
         let _sample_op = crate::GeometricOperation::RegionFill {

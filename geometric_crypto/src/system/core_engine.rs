@@ -3,8 +3,6 @@ use crate::core::coordinates::Coordinate3D;
 use crate::core::matrix::{GeometricMatrix, CryptoError};
 use crate::core::cache::HierarchicalCoordinateCache;
 use std::num::NonZeroUsize; // For LruCache capacity in HierarchicalCoordinateCache
-use blake3;
-use crate::security::prng::SecurePrng; // Import SecurePrng
 
 #[derive(Debug, Clone, Copy)]
 pub struct CoreEngineConfig {
@@ -74,35 +72,21 @@ impl CoreEngine {
     }
 
     /// Converts a sequence of coordinates back to bytes.
-    /// Uses the GeometricMatrix's reverse mapping after reversing the position-dependent transformation.
+    /// Uses the GeometricMatrix's reverse mapping.
     pub fn coordinates_to_bytes(&self, coords: &[Coordinate3D]) -> Result<Vec<u8>, String> {
         if self.matrix.coord_to_byte_map.is_empty() {
              panic!("CoreEngine's GeometricMatrix not initialized with mappings for reverse lookup.");
         }
         let mut bytes = Vec::with_capacity(coords.len());
-        // Iterate with index to get position
-        for (position, coord) in coords.iter().enumerate() {
-            // 1. Recalculate transformation seed based on matrix seed and position
-            let mut hasher = blake3::Hasher::new(); // Assuming blake3 is available as in GeometricMatrix
-            hasher.update(&self.seed);
-            hasher.update(&position.to_le_bytes());
-            let transformation_seed: [u8; 32] = hasher.finalize().into();
-
-            // 2. Create a temporary PRNG and generate the offset, mirroring coordinate_for_position
-            let mut transform_prng = SecurePrng::new(transformation_seed); // Assuming SecurePrng is available
-            let offset_x = transform_prng.next_u8();
-            let offset_y = transform_prng.next_u8();
-            let offset_z = transform_prng.next_u8();
-            let offset_coord = Coordinate3D::new(offset_x, offset_y, offset_z);
-
-            // 3. Reverse the transformation to get the base coordinate
-            //    Assuming Coordinate3D has a wrapping_sub or equivalent method.
-            let base_coord = (*coord).subtract(offset_coord); // Corrected method name and call on value
-
-            // 4. Look up the recovered base coordinate in the reverse map
-            match self.matrix.get_byte_for_coord(&base_coord) { // Assumes get_byte_for_coord exists
+        for coord in coords {
+            // GeometricMatrix.coord_to_byte_map is pub(crate). Need a public getter.
+            // Add this to GeometricMatrix:
+            // pub fn get_byte_for_coord(&self, coord: &Coordinate3D) -> Option<u8> {
+            //     self.coord_to_byte_map.get(coord).copied()
+            // }
+            match self.matrix.get_byte_for_coord(coord) { // Assumes get_byte_for_coord will be added
                 Some(byte_val) => bytes.push(byte_val),
-                None => return Err(format!("Coordinate {:?} (derived base {:?}) not found in reverse map.", coord, base_coord)),
+                None => return Err(format!("Coordinate {:?} not found in reverse map.", coord)),
             }
         }
         Ok(bytes)

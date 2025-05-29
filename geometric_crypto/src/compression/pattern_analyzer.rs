@@ -1,16 +1,34 @@
 use crate::core::coordinates::Coordinate3D;
 use crate::compression::engine::CompressionError;
 use serde::{Serialize, Deserialize};
-use std::collections::{HashMap, HashSet}; // Added HashSet
+use std::collections::{HashMap, HashSet};
+use std::cmp::Ordering; // For Ord implementation
 
 // PatternCandidate struct and distance_squared helper (no change from Turn 55)
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)] 
 pub struct PatternCandidate {
-    pub coordinates: Vec<Coordinate3D>,
+    pub coordinates: Vec<Coordinate3D>, 
     pub frequency: usize,
     pub spatial_density: f32,
-    pub compression_potential: f32,
+    pub compression_potential: f32, 
     pub first_occurrence_index: Option<usize>,
+}
+
+impl Eq for PatternCandidate {} // Manual implementation of Eq, relies on derived PartialEq
+
+impl PartialOrd for PatternCandidate {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for PatternCandidate {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.coordinates.cmp(&other.coordinates)
+            .then_with(|| self.frequency.cmp(&other.frequency))
+            .then_with(|| self.first_occurrence_index.cmp(&other.first_occurrence_index))
+            // Ignoring f32 fields for stable sorting in tests
+    }
 }
 
 fn distance_squared(c1: &Coordinate3D, c2: &Coordinate3D) -> u32 {

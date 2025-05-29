@@ -117,7 +117,7 @@ mod tests {
     fn get_sample_ops_for_obf_coverage() -> Vec<GeometricOperation> {
         vec![
             GeometricOperation::RegionFill {
-                start: Coordinate3D::new(0, 0, 0),
+                start: Coordinate3D::new(100, 150, 200),
                 end: Coordinate3D::new(15,25,35),
                 fill_byte: 1, 
                 compression_ratio: 1.0,
@@ -128,7 +128,7 @@ mod tests {
                 data_encoding: EncodingScheme::Raw,
             },
             GeometricOperation::PatternReference {
-                base_coordinate: Coordinate3D::new(123, 45, 67),
+                base_coordinate: Coordinate3D::new(5,5,5),
                 pattern_id: 1,
                 transformation_matrix: Matrix3x3::identity(),
             },
@@ -156,10 +156,7 @@ mod tests {
     #[test]
     fn test_obfuscate_deobfuscate_operations_full_coverage() { // Renamed and expanded test
         let mut layer = SecurityLayer::new();
-        // Changed master key to ensure obfuscation results in coordinate change
-        // Using a more complex key for better test coverage of obfuscation
-        let complex_key: [u8; 32] = [0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xff, 0x63, 0x68, 0x61, 0x6e, 0x6b, 0x2e, 0x62, 0x69, 0x6e, 0x00, 0xf3, 0x22, 0x91, 0x8b, 0x06, 0x00, 0x31, 0x35, 0x00, 0x00];
-        layer.set_master_key(complex_key).unwrap();
+        layer.set_master_key([1u8; 32]).unwrap();
         let context = SecurityContext::default();
         
         let mut ops = get_sample_ops_for_obf_coverage();
@@ -170,8 +167,7 @@ mod tests {
         // Assertions for changes (selective based on what's obfuscated)
         // RegionFill start coord
         if let (Some(GeometricOperation::RegionFill { start: s_orig, .. }), Some(GeometricOperation::RegionFill { start: s_obf, .. })) = (original_ops.get(0), ops.get(0)) {
-            // Removed assertion that start coord should change, as it can map to itself in rare cases.
-            // assert_ne!(s_orig, s_obf, "RegionFill start coord should change");
+            assert_ne!(s_orig, s_obf, "RegionFill start coord should change");
         }
         // PathTrace first waypoint
         if let (Some(GeometricOperation::PathTrace { waypoints: w_orig, .. }), Some(GeometricOperation::PathTrace { waypoints: w_obf, .. })) = (original_ops.get(1), ops.get(1)) {

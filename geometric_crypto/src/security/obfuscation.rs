@@ -105,13 +105,13 @@ mod tests {
     // test_non_linear_dispersion_reversible can remain as is
      #[test]
      fn test_rotation_obfuscation_reversible() { 
+        // This test would need to be filled in if its original content was more substantial
         // For now, ensuring it compiles. Original content from Turn 63 for this test:
         let obfuscator = CoordinateObfuscator::new();
-        // Changed test coordinate to one where Z-axis 90-degree rotation is reversible with u8.
-        let mut coords_90 = vec![Coordinate3D::new(0, 0, 30)]; 
+        let mut coords_90 = vec![Coordinate3D::new(10,20,30)];
         let original_coords_90 = coords_90.clone();
         obfuscator.obfuscate_by_rotation(&mut coords_90, Axis::Z, 90.0).unwrap();
-        obfuscator.deobfuscate_by_rotation(&mut coords_90, Axis::Z, -90.0).unwrap(); // Use -90.0 for deobfuscation
+        obfuscator.deobfuscate_by_rotation(&mut coords_90, Axis::Z, 90.0).unwrap();
         assert_eq!(coords_90, original_coords_90, "Rotation by 90 and -90 should be reversible for these values");
      }
      impl Coordinate3D { fn x_y_z_all_zero_or_max_for_axis_test_helper(&self, _axis: Axis) -> bool { false } } // minimal stub for test if original helper was in main code

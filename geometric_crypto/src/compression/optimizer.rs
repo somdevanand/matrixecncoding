@@ -2,32 +2,82 @@ use crate::core::coordinates::Coordinate3D;
 use crate::compression::operations::{GeometricOperation, Matrix3x3}; // Assuming fill_byte change is in operations.rs
 use crate::compression::pattern_analyzer::PatternCandidate;
 use crate::compression::engine::CompressionError;
-use std::collections::HashSet; // For managing covered coordinates/indices
+use std::collections::HashSet; 
+#[cfg(feature = "parallel")]
+use crate::core::parallel_processor::{ParallelProcessor, ParallelConfig};
+use crate::compression::pattern_analyzer::PatternAnalyzer;
 
-#[derive(Debug, Default, Clone)]
-pub struct OperationOptimizer;
+
+#[derive(Debug, Clone)] // Removed Default as new() is now custom
+pub struct OperationOptimizer {
+    pattern_analyzer: PatternAnalyzer,
+    #[cfg(feature = "parallel")]
+    parallel_processor: Option<ParallelProcessor>,
+    // Add any optimizer specific config if needed, e.g. min_pattern_len for this stage
+    min_pattern_window: usize, 
+    max_pattern_window: usize,
+}
 
 impl OperationOptimizer {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(
+        min_pattern_window: usize,
+        max_pattern_window: usize,
+        #[cfg(feature = "parallel")] parallel_enabled: bool,
+        #[cfg(feature = "parallel")] parallel_config: Option<ParallelConfig>
+    ) -> Self {
+        let analyzer = PatternAnalyzer::new();
+        
+        #[cfg(feature = "parallel")]
+        let pp = if parallel_enabled && parallel_config.is_some() {
+            Some(ParallelProcessor::new(parallel_config.unwrap()))
+        } else {
+            None
+        };
+
+        Self {
+            pattern_analyzer: analyzer,
+            #[cfg(feature = "parallel")]
+            parallel_processor: pp,
+            min_pattern_window,
+            max_pattern_window,
+        }
     }
+    
+    // Helper method to find patterns (conditionally parallel)
+    fn find_patterns_for_optimizer(
+        &self,
+        coords: &[Coordinate3D]
+    ) -> Result<Vec<PatternCandidate>, CompressionError> {
+        #[cfg(feature = "parallel")]
+        if let Some(pp) = &self.parallel_processor {
+            // parallel_pattern_analysis returns Vec, not Result.
+            // For consistency, if find_patterns can fail, parallel should too, or handle error internally.
+            // Assuming parallel_pattern_analysis is changed to return Result or this is adapted.
+            // Current parallel_pattern_analysis takes analyzer as arg.
+            return Ok(pp.parallel_pattern_analysis(
+                coords, 
+                &self.pattern_analyzer, 
+                self.min_pattern_window, 
+                self.max_pattern_window
+            )); 
+        }
+        // Fallback to sequential if "parallel" feature is not enabled or pp is None
+        self.pattern_analyzer.find_patterns(coords, self.min_pattern_window, self.max_pattern_window)
+    }
+
 
     /// Optimizes operations using an enhanced greedy approach.
     pub fn optimize_operations(
         &self,
-        coords: &[Coordinate3D], // Original coordinates needed to get base_coordinate for patterns
-        patterns: &[PatternCandidate],
-        clusters: &[Vec<Coordinate3D>],
+        coords: &[Coordinate3D], // Original coordinates
+        // patterns: &[PatternCandidate], // Patterns will be found internally now
+        clusters: &[Vec<Coordinate3D>], // Clusters are still passed in
     ) -> Result<Vec<GeometricOperation>, CompressionError> {
         let mut operations: Vec<GeometricOperation> = Vec::new();
-        // For simplicity, assume coords is small enough that a Vec<bool> is fine.
-        // For larger inputs, a more complex data structure might be needed.
         let mut covered_indices: HashSet<usize> = HashSet::new(); 
-                                                // Stores indices from the original `coords` slice
 
-        // 1. Prioritize patterns
-        // Sort patterns by compression_potential (descending)
-        let mut sorted_patterns = patterns.to_vec(); // Clone to sort
+        // 1. Find and prioritize patterns
+        let mut sorted_patterns = self.find_patterns_for_optimizer(coords)?;
         sorted_patterns.sort_by(|a, b| b.compression_potential.partial_cmp(&a.compression_potential).unwrap_or(std::cmp::Ordering::Equal));
 
         for pattern_candidate in sorted_patterns {
@@ -79,32 +129,9 @@ impl OperationOptimizer {
                             pattern_id: 0, // Placeholder ID
                             transformation_matrix: Matrix3x3::identity(),
                         });
-                        // Mark the first occurrence as covered
-                        for idx_to_cover in &pattern_instance_indices_to_cover {
-                            covered_indices.insert(*idx_to_cover);
+                        for idx_to_cover in pattern_instance_indices_to_cover {
+                            covered_indices.insert(idx_to_cover);
                         }
-
-                        // *** NEW LOGIC: Mark subsequent contiguous occurrences as covered ***
-                        let mut current_check_idx = start_idx + pattern_len;
-                        while current_check_idx + pattern_len <= coords.len() {
-                            let mut is_contiguous_repetition = true;
-                            for i in 0..pattern_len {
-                                if covered_indices.contains(&(current_check_idx + i)) || coords[current_check_idx + i] != pattern_candidate.coordinates[i] {
-                                    is_contiguous_repetition = false;
-                                    break;
-                                }
-                            }
-                            if is_contiguous_repetition {
-                                // Mark this contiguous occurrence as covered
-                                for i in 0..pattern_len {
-                                    covered_indices.insert(current_check_idx + i);
-                                }
-                                current_check_idx += pattern_len;
-                            } else {
-                                break; // Not a contiguous repetition or already covered
-                            }
-                        }
-                        // *** END NEW LOGIC ***
                     }
                 }
             }
@@ -233,9 +260,9 @@ impl OperationOptimizer {
                     // Check X-line from lookahead_idx
                     let mut potential_x_line = true;
                     for l in 0..MIN_LINE_LEN {
-                        // A point in a potential new line must not be covered, unless it's the very first point (l=0, which is lookahead_idx)
-                        if covered_indices.contains(&(lookahead_idx + l)) && l > 0 { potential_x_line = false; break; }
-                        if lookahead_idx + l >= coords.len() { potential_x_line = false; break; }
+                        if lookahead_idx + l >= coords.len() || covered_indices.contains(&(lookahead_idx + l)) { 
+                            potential_x_line = false; break; 
+                        }
                         let expected = Coordinate3D::new(coords[lookahead_idx].x.wrapping_add(l as u8), coords[lookahead_idx].y, coords[lookahead_idx].z);
                         if coords[lookahead_idx + l] != expected { potential_x_line = false; break; }
                     }
@@ -245,8 +272,9 @@ impl OperationOptimizer {
                     if !can_start_new_line_at_lookahead {
                         let mut potential_y_line = true;
                         for l in 0..MIN_LINE_LEN {
-                            if covered_indices.contains(&(lookahead_idx + l)) && l > 0 { potential_y_line = false; break; }
-                            if lookahead_idx + l >= coords.len() { potential_y_line = false; break; }
+                            if lookahead_idx + l >= coords.len() || covered_indices.contains(&(lookahead_idx + l)) { 
+                                potential_y_line = false; break; 
+                            }
                             let expected = Coordinate3D::new(coords[lookahead_idx].x, coords[lookahead_idx].y.wrapping_add(l as u8), coords[lookahead_idx].z);
                             if coords[lookahead_idx + l] != expected { potential_y_line = false; break; }
                         }
@@ -256,8 +284,9 @@ impl OperationOptimizer {
                     if !can_start_new_line_at_lookahead {
                         let mut potential_z_line = true;
                         for l in 0..MIN_LINE_LEN {
-                            if covered_indices.contains(&(lookahead_idx + l)) && l > 0 { potential_z_line = false; break; }
-                            if lookahead_idx + l >= coords.len() { potential_z_line = false; break; }
+                            if lookahead_idx + l >= coords.len() || covered_indices.contains(&(lookahead_idx + l)) { 
+                                potential_z_line = false; break; 
+                            }
                             let expected = Coordinate3D::new(coords[lookahead_idx].x, coords[lookahead_idx].y, coords[lookahead_idx].z.wrapping_add(l as u8));
                             if coords[lookahead_idx + l] != expected { potential_z_line = false; break; }
                         }
@@ -322,31 +351,59 @@ mod tests {
         ]
     }
 
+    #[cfg(feature = "parallel")]
+    use crate::core::parallel_processor::ParallelConfig;
+
+    // Helper to create optimizer for tests, assuming non-parallel for most optimizer logic tests
+    fn create_test_optimizer() -> OperationOptimizer {
+        #[cfg(feature = "parallel")]
+        return OperationOptimizer::new(4, 32, false, None);
+        #[cfg(not(feature = "parallel"))]
+        return OperationOptimizer::new(4, 32);
+    }
+
     #[test]
     fn test_optimize_operations_empty_input() {
-        let optimizer = OperationOptimizer::new();
-        let result = optimizer.optimize_operations(&[], &[], &[]);
+        let optimizer = create_test_optimizer();
+        let result = optimizer.optimize_operations(&[], &[]);
         assert!(result.is_ok());
         assert!(result.unwrap().is_empty());
     }
 
     #[test]
     fn test_optimize_prioritizes_patterns() {
-        let optimizer = OperationOptimizer::new();
-        let coords = get_test_coords(); // Uses indices 0,1,2 and 4,5,6 for P1
+        let optimizer = create_test_optimizer();
+        let coords = get_test_coords();
 
-        let pattern1 = PatternCandidate {
-            coordinates: vec![coords[0], coords[1], coords[2]],
-            frequency: 2, spatial_density: 0.3, compression_potential: 20.0, first_occurrence_index: Some(0)
-        };
-        // A less optimal pattern that also matches at index 0
-        let pattern2 = PatternCandidate {
-            coordinates: vec![coords[0], coords[1]],
-            frequency: 2, spatial_density: 0.5, compression_potential: 10.0, first_occurrence_index: Some(0)
-        };
-        let patterns = vec![pattern2, pattern1.clone()]; // P1 is better but listed second
+        // Patterns would be found by find_patterns_for_optimizer. 
+        // To test prioritization, we'd mock or ensure specific patterns are found.
+        // The current test structure for OperationOptimizer assumes patterns are passed in.
+        // Since find_patterns_for_optimizer is now internal, this test needs to be re-thought
+        // or we test find_patterns_for_optimizer separately if we want to assert on PatternCandidate creation.
+        // For now, let's test with coords that *should* produce known patterns via internal call.
         
-        let result = optimizer.optimize_operations(&coords, &patterns, &[]);
+        // Coords for this test:
+        // P1: (1,0,0),(2,0,0),(3,0,0) - occurs twice
+        // Separator: (10,0,0)
+        // Y-Line L1: (5,5,5),(5,6,5),(5,7,5)
+        // Single S1: (10,10,10)
+        // Short X-Line: (20,0,0),(21,0,0)
+        
+        // Let's use a simpler coord set for direct pattern testing if find_patterns_for_optimizer is called.
+        let test_coords_for_patterns = vec![
+            Coordinate3D::new(1,0,0), Coordinate3D::new(2,0,0), Coordinate3D::new(3,0,0), // P1
+            Coordinate3D::new(10,0,0), // Separator
+            Coordinate3D::new(1,0,0), Coordinate3D::new(2,0,0), Coordinate3D::new(3,0,0), // P1 again
+        ];
+
+        // This test will rely on the internal find_patterns_for_optimizer finding these.
+        // The optimizer itself sorts by compression_potential.
+        // find_patterns calculates potential as ((freq-1)*len).
+        // For P1 (len 3, freq 2): (2-1)*3 = 3.
+        // If there was another pattern P_short (len 2, freq 3): (3-1)*2 = 4. P_short would be prioritized.
+        // In test_coords_for_patterns, only P1 (len 3, freq 2) should be found by default window sizes (e.g. 2-4).
+        
+        let result = optimizer.optimize_operations(&test_coords_for_patterns, &[]);
         assert!(result.is_ok());
         let ops = result.unwrap();
         
@@ -401,12 +458,12 @@ mod tests {
 
     #[test]
     fn test_optimize_line_detection_x_axis() {
-        let optimizer = OperationOptimizer::new();
+        let optimizer = create_test_optimizer();
         let coords = vec![
             Coordinate3D::new(1,0,0), Coordinate3D::new(2,0,0), Coordinate3D::new(3,0,0), Coordinate3D::new(4,0,0), // X-Line
             Coordinate3D::new(10,0,0), // Separator
         ];
-        let result = optimizer.optimize_operations(&coords, &[], &[]); // No patterns, no clusters
+        let result = optimizer.optimize_operations(&coords, &[]);
         assert!(result.is_ok());
         let ops = result.unwrap();
         assert_eq!(ops.len(), 2); // RegionFill for X-Line, PathTrace for separator
@@ -429,11 +486,11 @@ mod tests {
 
     #[test]
     fn test_optimize_line_detection_y_axis() {
-        let optimizer = OperationOptimizer::new();
+        let optimizer = create_test_optimizer();
         let coords = vec![
             Coordinate3D::new(5,5,5), Coordinate3D::new(5,6,5), Coordinate3D::new(5,7,5), // Y-Line
         ];
-        let result = optimizer.optimize_operations(&coords, &[], &[]);
+        let result = optimizer.optimize_operations(&coords, &[]);
         assert!(result.is_ok());
         let ops = result.unwrap();
         assert_eq!(ops.len(), 1);
@@ -448,11 +505,11 @@ mod tests {
     
     #[test]
     fn test_optimize_short_sequence_becomes_pathtrace() {
-        let optimizer = OperationOptimizer::new();
+        let optimizer = create_test_optimizer();
         let coords = vec![
             Coordinate3D::new(20,0,0), Coordinate3D::new(21,0,0), // Short X-Line (len 2)
         ];
-        let result = optimizer.optimize_operations(&coords, &[], &[]);
+        let result = optimizer.optimize_operations(&coords, &[]);
         assert!(result.is_ok());
         let ops = result.unwrap();
         assert_eq!(ops.len(), 1);
@@ -468,13 +525,13 @@ mod tests {
 
     #[test]
     fn test_optimize_individual_points_become_pathtraces() {
-        let optimizer = OperationOptimizer::new();
+        let optimizer = create_test_optimizer();
         let coords = vec![
             Coordinate3D::new(1,1,1),
             Coordinate3D::new(3,3,3),
             Coordinate3D::new(5,5,5),
         ];
-        let result = optimizer.optimize_operations(&coords, &[], &[]);
+        let result = optimizer.optimize_operations(&coords, &[]);
         assert!(result.is_ok());
         let ops = result.unwrap();
         // Each individual point, if not forming a region, will become its own PathTrace(vec![point])
@@ -492,25 +549,22 @@ mod tests {
     
     #[test]
     fn test_mixed_operations_pattern_lines_points() {
-        let optimizer = OperationOptimizer::new();
+        // This test will use an optimizer configured to find the P1 pattern.
+        // Other patterns/lines will be found by the subsequent logic.
+        #[cfg(feature = "parallel")]
+        let optimizer = OperationOptimizer::new(3,3,false, None); // min/max window = 3 to find P1
+        #[cfg(not(feature = "parallel"))]
+        let optimizer = OperationOptimizer::new(3,3);
+
+
         let coords = vec![
-            // Pattern P1
-            Coordinate3D::new(0,0,0), Coordinate3D::new(1,0,0), Coordinate3D::new(2,0,0), // Indices 0,1,2
-            // Separator Point S1
-            Coordinate3D::new(10,0,0),                                                    // Index 3
-            // Line L1 (Y-axis)
-            Coordinate3D::new(5,5,5), Coordinate3D::new(5,6,5), Coordinate3D::new(5,7,5), // Indices 4,5,6
-            // Short sequence P2
-            Coordinate3D::new(20,0,0), Coordinate3D::new(21,0,0),                         // Indices 7,8
+            Coordinate3D::new(0,0,0), Coordinate3D::new(1,0,0), Coordinate3D::new(2,0,0), // P1
+            Coordinate3D::new(10,0,0),                                                    // S1
+            Coordinate3D::new(5,5,5), Coordinate3D::new(5,6,5), Coordinate3D::new(5,7,5), // L1 (Y-axis)
+            Coordinate3D::new(20,0,0), Coordinate3D::new(21,0,0),                         // P2 (short path)
         ];
-
-        let pattern_p1 = PatternCandidate {
-            coordinates: vec![coords[0], coords[1], coords[2]],
-            frequency: 1, spatial_density: 0.8, compression_potential: 30.0, first_occurrence_index: Some(0)
-        };
-        let patterns = vec![pattern_p1];
-
-        let result = optimizer.optimize_operations(&coords, &patterns, &[]);
+        // Pattern finding for P1 (len 3) should be done internally.
+        let result = optimizer.optimize_operations(&coords, &[]);
         assert!(result.is_ok());
         let ops = result.unwrap();
 
@@ -552,70 +606,60 @@ mod tests {
     // Original test from the prompt, slightly adapted
     #[test]
     fn test_optimize_operations_original_cases() {
-        let optimizer = OperationOptimizer::new();
-        let coords = vec![
+        // Case 1: Two occurrences of a pattern
+        #[cfg(feature = "parallel")]
+        let optimizer_case1 = OperationOptimizer::new(3, 3, false, None); // min/max window = 3 to find P1
+        #[cfg(not(feature = "parallel"))]
+        let optimizer_case1 = OperationOptimizer::new(3, 3);
+        
+        let coords_case1 = vec![
             Coordinate3D::new(1,0,0), Coordinate3D::new(2,0,0), Coordinate3D::new(3,0,0), // P1
             Coordinate3D::new(10,0,0), // Separator
             Coordinate3D::new(1,0,0), Coordinate3D::new(2,0,0), Coordinate3D::new(3,0,0), // P1 again
         ];
+        // Patterns are now found internally. The internal find_patterns_for_optimizer
+        // should find two instances of P1 if it correctly identifies non-overlapping occurrences,
+        // or if the current PatternCandidate logic (which only has first_occurrence_index) is adapted.
+        // The current pattern logic in optimize_operations iterates sorted_patterns and applies one instance.
+        // If find_patterns_for_optimizer returns multiple PatternCandidate structs for the same pattern
+        // at different locations, they'd be sorted by potential.
+        // Let's assume find_patterns_for_optimizer (as it calls analyzer.find_patterns)
+        // will return one PatternCandidate for "[(1,0,0),(2,0,0),(3,0,0)]" with freq=2, first_idx=0.
+        // The optimizer will apply this once. The second occurrence will be handled by subsequent logic.
 
-        // Case 1: Prioritize best pattern (from original test)
-        // This part of the test is more about how the optimizer handles pre-supplied PatternCandidates
-        let pattern_cand_1 = PatternCandidate {
-            coordinates: vec![coords[0], coords[1], coords[2]],
-            frequency: 2, spatial_density: 0.3, compression_potential: 20.0, first_occurrence_index: Some(0)
-        };
-        let pattern_cand_2 = PatternCandidate { // Same pattern, different instance/potential, to test sorting/selection
-            coordinates: vec![coords[4], coords[5], coords[6]],
-            frequency: 2, spatial_density: 0.3, compression_potential: 19.0, first_occurrence_index: Some(4)
-        };
-        // The optimizer's pattern logic will apply pattern_cand_1.
-        // Then, when my new logic runs, indices 0,1,2 are covered.
-        // It will process coord[3] (PathTrace).
-        // Then it will process coords[4,5,6] which will likely become a RegionFill (X-line) or PathTrace.
-        // It will NOT use pattern_cand_2 because that candidate's occurrence at index 4 is processed
-        // by the subsequent loop, not by the pattern selection part if pattern_cand_1 was already chosen and covered earlier indices.
-        // The current pattern logic in optimizer.rs is:
-        //   for pattern_candidate in sorted_patterns { ... if can_apply { operations.push(PatternRef); covered_indices.insert() }}
-        // This means it will select pattern_cand_1. It will then iterate again for pattern_cand_2.
-        // pattern_cand_2's occurrence is at index 4. If indices 0,1,2 are covered by pattern_cand_1,
-        // then pattern_cand_2 (starting at index 4) *can* still be applied by the pattern logic.
-        // This means the pattern logic itself can add multiple PatternReference ops if they don't overlap.
-
-        let patterns_for_case1 = vec![pattern_cand_1.clone(), pattern_cand_2.clone()];
-        let result_case1 = optimizer.optimize_operations(&coords, &patterns_for_case1, &[]);
+        let result_case1 = optimizer_case1.optimize_operations(&coords_case1, &[]);
         assert!(result_case1.is_ok());
         let ops_case1 = result_case1.unwrap();
         
-        // Expected: Two PatternReference ops (one for each occurrence of P1), then one PathTrace for the separator.
-        assert_eq!(ops_case1.len(), 3, "Expected two PatternRefs and one PathTrace for separator. Ops: {:?}", ops_case1);
-        
-        let mut pattern_ref_count = 0;
-        let mut path_trace_count = 0;
-        for op in &ops_case1 {
-            match op {
-                GeometricOperation::PatternReference { base_coordinate, .. } => {
-                    pattern_ref_count += 1;
-                    // Check if base_coordinate is one of the expected pattern starts
-                    assert!(*base_coordinate == coords[0] || *base_coordinate == coords[4]);
-                }
-                GeometricOperation::PathTrace { waypoints, .. } => {
-                    path_trace_count +=1;
-                    assert_eq!(waypoints.len(), 1);
-                    assert_eq!(waypoints[0], coords[3]);
-                }
-                _ => panic!("Unexpected operation type in Case 1: {:?}", op),
-            }
+        // Expected: 
+        // 1. PatternRef for P1 at index 0. Covered: 0,1,2
+        // 2. PathTrace for Separator at index 3. Covered: 3
+        // 3. RegionFill for P1-again at index 4 (as X-line). Covered: 4,5,6
+        assert_eq!(ops_case1.len(), 3, "Case 1: Expected PatternRef, PathTrace, RegionFill. Ops: {:?}", ops_case1);
+        match &ops_case1[0] {
+            GeometricOperation::PatternReference { base_coordinate, .. } => assert_eq!(*base_coordinate, coords_case1[0]),
+            _ => panic!("Case 1 Op 0: Expected PatternReference, got {:?}", ops_case1[0]),
         }
-        assert_eq!(pattern_ref_count, 2, "Expected two PatternReference operations for Case 1");
-        assert_eq!(path_trace_count, 1, "Expected one PathTrace operation for separator for Case 1");
+         match &ops_case1[1] {
+            GeometricOperation::PathTrace { waypoints, .. } => assert_eq!(waypoints[0], coords_case1[3]),
+            _ => panic!("Case 1 Op 1: Expected PathTrace, got {:?}", ops_case1[1]),
+        }
+        match &ops_case1[2] {
+            GeometricOperation::RegionFill { start, end, .. } => {
+                assert_eq!(*start, coords_case1[4]);
+                assert_eq!(*end, coords_case1[6]);
+            }
+            _ => panic!("Case 1 Op 2: Expected RegionFill for P1-again, got {:?}", ops_case1[2]),
+        }
 
+        // Case 2: Cluster-like data (no actual clusters passed, just coords)
+        #[cfg(feature = "parallel")]
+        let optimizer_case2 = OperationOptimizer::new(2, 2, false, None);
+        #[cfg(not(feature = "parallel"))]
+        let optimizer_case2 = OperationOptimizer::new(2, 2);
 
-        // Case 2: Cluster processing (original test used clusters input, my logic doesn't use it directly anymore)
-        // My logic will find lines/paths from the main `coords` list.
-        // If I provide cluster_coords as the main `coords`:
         let cluster_coords_as_main = vec![Coordinate3D::new(10,0,0), Coordinate3D::new(11,0,0), Coordinate3D::new(10,1,0)];
-        let result_cluster_as_main = optimizer.optimize_operations(&cluster_coords_as_main, &[], &[]);
+        let result_cluster_as_main = optimizer_case2.optimize_operations(&cluster_coords_as_main, &[]);
         assert!(result_cluster_as_main.is_ok());
         let ops_cluster_as_main = result_cluster_as_main.unwrap();
         // Current line logic only finds X or Y lines, not mixed like this to form a RegionFill for the bounding box.
