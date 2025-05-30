@@ -76,71 +76,11 @@ impl OperationOptimizer {
         let mut operations: Vec<GeometricOperation> = Vec::new();
         let mut covered_indices: HashSet<usize> = HashSet::new(); 
 
-        // 1. Find and prioritize patterns
+        // Find and prioritize patterns candidates once
         let mut sorted_patterns = self.find_patterns_for_optimizer(coords)?;
         sorted_patterns.sort_by(|a, b| b.compression_potential.partial_cmp(&a.compression_potential).unwrap_or(std::cmp::Ordering::Equal));
 
-        for pattern_candidate in sorted_patterns {
-            if pattern_candidate.coordinates.is_empty() || pattern_candidate.compression_potential <= 0.0 {
-                continue;
-            }
-
-            // Try to apply this pattern multiple times if its occurrences don't overlap significantly
-            // This basic version will just try to apply it based on its first_occurrence_index if not covered.
-            // A full solution would search for all non-overlapping occurrences.
-            if let Some(start_idx) = pattern_candidate.first_occurrence_index {
-                let pattern_len = pattern_candidate.coordinates.len();
-                let mut current_op_covers_new_indices = false;
-                // Check if *any* part of this specific instance would cover new ground
-                for i in 0..pattern_len {
-                     if start_idx + i >= coords.len() { // Boundary check
-                        current_op_covers_new_indices = false; // Invalid pattern instance
-                        break;
-                    }
-                    if !covered_indices.contains(&(start_idx + i)) {
-                        current_op_covers_new_indices = true;
-                        break;
-                    }
-                }
-
-                if current_op_covers_new_indices {
-                    // Check if this specific occurrence is (mostly) uncovered
-                    let mut pattern_instance_indices_to_cover = Vec::new();
-                    let mut can_apply = true; // Assume true until proven otherwise
-                    for i in 0..pattern_len {
-                        // This boundary check is redundant due to the one above if start_idx + i doesn't change
-                        // but keeping for safety if logic evolves.
-                        if start_idx + i >= coords.len() { 
-                            can_apply = false; break;
-                        }
-                        if covered_indices.contains(&(start_idx + i)) {
-                            // Overlap logic: for now, if any part of the first occurrence is covered, skip.
-                            // A more complex logic could allow partial overlaps or find other occurrences.
-                            // For this simplified greedy version, we only consider the first reported occurrence.
-                            // If this first occurrence is blocked, we don't use this pattern candidate.
-                            can_apply = false; break;
-                        }
-                        pattern_instance_indices_to_cover.push(start_idx+i);
-                    }
-
-                    if can_apply {
-                        operations.push(GeometricOperation::PatternReference {
-                            base_coordinate: coords[start_idx], // Use actual coord from original sequence
-                            pattern_id: 0, // Placeholder ID
-                            transformation_matrix: Matrix3x3::identity(),
-                        });
-                        for idx_to_cover in pattern_instance_indices_to_cover {
-                            covered_indices.insert(idx_to_cover);
-                        }
-                    }
-                }
-            }
-        }
-
-        // 2. Process clusters for RegionFill (basic version) - This logic will be replaced by iterating through coords.
-        // The `clusters` input might be used by a more advanced RegionFill or other ops later.
-        // For now, the primary logic will iterate `coords` using `covered_indices`.
-
+        // Iterate through coordinates, applying the first matching and most beneficial operation (Pattern, then Line, then Path)
         let mut i = 0;
         while i < coords.len() {
             if covered_indices.contains(&i) {
@@ -149,185 +89,150 @@ impl OperationOptimizer {
             }
 
             let coord_start = coords[i];
-            let mut current_op_indices = Vec::new();
 
-            // Try to detect a RegionFill (line along X, then Y, then Z for simplicity)
-            // Minimum line length for RegionFill (e.g., 3)
+            let mut operation_applied = false;
+
+            // 1. Check for Pattern occurrences starting at the current index 'i'
+            for pattern_candidate in sorted_patterns.iter() {
+                let pattern_len = pattern_candidate.coordinates.len();
+                 if pattern_len == 0 || i + pattern_len > coords.len() { continue; }
+
+                 // Check if the segment from i matches the pattern and is not covered
+                 let mut is_match = true;
+                 let mut segment_covered = false;
+                 for k in 0..pattern_len {
+                     if i + k >= coords.len() || coords[i + k] != pattern_candidate.coordinates[k] {
+                         is_match = false;
+                         break;
+                     }
+                      if covered_indices.contains(&(i + k)) {
+                         segment_covered = true;
+                         break;
+                     }
+                 }
+
+                 if is_match && !segment_covered {
+                     // Apply PatternReference
+                      operations.push(GeometricOperation::PatternReference {
+                         base_coordinate: coords[i], 
+                         pattern_id: 0, // Placeholder ID
+                         transformation_matrix: Matrix3x3::identity(),
+                     });
+                     // Mark indices covered by this occurrence
+                     for k in 0..pattern_len {
+                         covered_indices.insert(i + k);
+                     }
+                     i += pattern_len; // Move index past the applied pattern
+                     operation_applied = true; // A pattern was applied
+                     break; // Prioritize the first found pattern at this index
+                 }
+            }
+
+            if operation_applied { continue; } // If a pattern was applied, move to the next iteration
+
+            // 2. If no pattern applied, check if the current segment is a line (RegionFill) from the current index 'i'
             const MIN_LINE_LEN: usize = 3;
 
-            // Attempt X-axis line
-            let mut x_line_coords = vec![coord_start];
-            current_op_indices.push(i);
-            for j in 1..(coords.len() - i) {
-                if covered_indices.contains(&(i + j)) { break; }
-                let next_expected = Coordinate3D::new(coord_start.x.wrapping_add(j as u8), coord_start.y, coord_start.z);
-                if coords[i+j] == next_expected {
-                    x_line_coords.push(coords[i+j]);
-                    current_op_indices.push(i+j);
-                } else {
-                    break;
-                }
-            }
-            if x_line_coords.len() >= MIN_LINE_LEN {
-                operations.push(GeometricOperation::RegionFill {
-                    start: coord_start,
-                    end: *x_line_coords.last().unwrap(),
-                    fill_byte: 0, // Placeholder
-                    compression_ratio: x_line_coords.len() as f32, // Simple ratio
-                });
-                for idx in &current_op_indices { covered_indices.insert(*idx); }
-                i += x_line_coords.len();
-                continue;
-            }
-            current_op_indices.clear(); // Reset for next attempt
-
-            // Attempt Y-axis line (if X-line failed)
-            let mut y_line_coords = vec![coord_start];
-            current_op_indices.push(i);
-            for j in 1..(coords.len() - i) {
-                 if covered_indices.contains(&(i + j)) { break; }
-                let next_expected = Coordinate3D::new(coord_start.x, coord_start.y.wrapping_add(j as u8), coord_start.z);
-                // This check is flawed: coords[i+j] might not be the (j)-th element in a Y-line if data is sparse.
-                // For simple contiguous check in original array:
-                // This requires that coords[i], coords[i+1], coords[i+2] form the Y-line.
-                // The current pattern analyzer and optimizer structure assumes patterns/ops replace contiguous segments of the original array.
-                // Let's stick to that for now.
-                if coords[i+j] == next_expected {
-                    y_line_coords.push(coords[i+j]);
-                    current_op_indices.push(i+j);
-                } else {
-                    break;
-                }
-            }
-            if y_line_coords.len() >= MIN_LINE_LEN {
-                 operations.push(GeometricOperation::RegionFill {
-                    start: coord_start,
-                    end: *y_line_coords.last().unwrap(),
-                    fill_byte: 0, // Placeholder
-                    compression_ratio: y_line_coords.len() as f32,
-                });
-                for idx in &current_op_indices { covered_indices.insert(*idx); }
-                i += y_line_coords.len();
-                continue;
-            }
-            current_op_indices.clear();
-
-
-            // Attempt Z-axis line (if X and Y-lines failed)
-            // Note: This is a simplified 1D line check along Z.
-            // A true 3D RegionFill detection would be more complex.
-            let mut z_line_coords = vec![coord_start];
-            current_op_indices.push(i); // Start with current point
-            for j in 1..(coords.len() - i) {
-                if covered_indices.contains(&(i + j)) { break; }
-                let next_expected = Coordinate3D::new(coord_start.x, coord_start.y, coord_start.z.wrapping_add(j as u8));
-                if coords[i+j] == next_expected {
-                    z_line_coords.push(coords[i+j]);
-                    current_op_indices.push(i+j);
-                } else {
-                    break;
-                }
-            }
-            if z_line_coords.len() >= MIN_LINE_LEN {
-                 operations.push(GeometricOperation::RegionFill {
-                    start: coord_start,
-                    end: *z_line_coords.last().unwrap(),
-                    fill_byte: 0, // Placeholder
-                    compression_ratio: z_line_coords.len() as f32,
-                });
-                for idx_to_cover in current_op_indices { covered_indices.insert(idx_to_cover); }
-                i += z_line_coords.len();
-                // current_op_indices.clear(); // Not strictly needed here due to continue
-                continue; 
-            }
-            current_op_indices.clear(); // Clear if Z-line check fails
-
-            // Fallback: PathTrace. Collect subsequent points as long as they don't start a new line.
-            current_op_indices.clear();
-            let mut path_trace_waypoints = vec![coord_start];
-            current_op_indices.push(i);
-
-            for k in 1..(coords.len() - i) {
-                let lookahead_idx = i + k;
-                if covered_indices.contains(&lookahead_idx) {
-                    break; 
-                }
-
-                // Check if coords[lookahead_idx] could start a new line of MIN_LINE_LEN.
-                // If it can, the current PathTrace should end *before* this point.
-                let mut can_start_new_line_at_lookahead = false;
-                if lookahead_idx + MIN_LINE_LEN <= coords.len() {
-                    // Check X-line from lookahead_idx
-                    let mut potential_x_line = true;
-                    for l in 0..MIN_LINE_LEN {
-                        if lookahead_idx + l >= coords.len() || covered_indices.contains(&(lookahead_idx + l)) { 
-                            potential_x_line = false; break; 
-                        }
-                        let expected = Coordinate3D::new(coords[lookahead_idx].x.wrapping_add(l as u8), coords[lookahead_idx].y, coords[lookahead_idx].z);
-                        if coords[lookahead_idx + l] != expected { potential_x_line = false; break; }
-                    }
-                    if potential_x_line { can_start_new_line_at_lookahead = true; }
-
-                    // Check Y-line
-                    if !can_start_new_line_at_lookahead {
-                        let mut potential_y_line = true;
-                        for l in 0..MIN_LINE_LEN {
-                            if lookahead_idx + l >= coords.len() || covered_indices.contains(&(lookahead_idx + l)) { 
-                                potential_y_line = false; break; 
-                            }
-                            let expected = Coordinate3D::new(coords[lookahead_idx].x, coords[lookahead_idx].y.wrapping_add(l as u8), coords[lookahead_idx].z);
-                            if coords[lookahead_idx + l] != expected { potential_y_line = false; break; }
-                        }
-                        if potential_y_line { can_start_new_line_at_lookahead = true; }
-                    }
-                    // Check Z-line
-                    if !can_start_new_line_at_lookahead {
-                        let mut potential_z_line = true;
-                        for l in 0..MIN_LINE_LEN {
-                            if lookahead_idx + l >= coords.len() || covered_indices.contains(&(lookahead_idx + l)) { 
-                                potential_z_line = false; break; 
-                            }
-                            let expected = Coordinate3D::new(coords[lookahead_idx].x, coords[lookahead_idx].y, coords[lookahead_idx].z.wrapping_add(l as u8));
-                            if coords[lookahead_idx + l] != expected { potential_z_line = false; break; }
-                        }
-                        if potential_z_line { can_start_new_line_at_lookahead = true; }
+            // Check for X-axis line starting at i
+            if coords.len() - i >= MIN_LINE_LEN {
+                let mut is_x_line = true;
+                let mut line_len = 1;
+                for k in 1..(coords.len() - i) {
+                    if covered_indices.contains(&(i + k)) { break; }
+                    let expected = Coordinate3D::new(coords[i].x.wrapping_add(k as u8), coords[i].y, coords[i].z);
+                    if coords[i + k] == expected {
+                        line_len += 1;
+                    } else {
+                        break;
                     }
                 }
+                if is_x_line && line_len >= MIN_LINE_LEN {
+                    let line_end_idx = i + line_len - 1;
+                     operations.push(GeometricOperation::RegionFill {
+                         start: coords[i],
+                         end: coords[line_end_idx],
+                         fill_byte: 0, // Placeholder
+                         compression_ratio: line_len as f32,
+                     });
+                      for k in 0..line_len { covered_indices.insert(i + k); }
+                      i += line_len; // Move index past the applied line
+                      operation_applied = true; // A region fill was applied
+                 }
+             }
 
-                if can_start_new_line_at_lookahead {
-                    break; 
-                }
+             if !operation_applied && coords.len() - i >= MIN_LINE_LEN {
+                  // Check for Y-axis line starting at i
+                 let mut is_y_line = true;
+                 let mut line_len = 1;
+                 for k in 1..(coords.len() - i) {
+                     if covered_indices.contains(&(i + k)) { break; }
+                     let expected = Coordinate3D::new(coords[i].x, coords[i].y.wrapping_add(k as u8), coords[i].z);
+                     if coords[i + k] == expected {
+                         line_len += 1;
+                     } else {
+                         break;
+                     }
+                 }
+                  if is_y_line && line_len >= MIN_LINE_LEN {
+                       let line_end_idx = i + line_len - 1;
+                      operations.push(GeometricOperation::RegionFill {
+                          start: coords[i],
+                          end: coords[line_end_idx],
+                          fill_byte: 0, // Placeholder
+                          compression_ratio: line_len as f32,
+                      });
+                       for k in 0..line_len { covered_indices.insert(i + k); }
+                       i += line_len;
+                       operation_applied = true;
+                  }
+             }
 
-                // NEW CHECK: Is coords[lookahead_idx] sequential to path_trace_waypoints.last()?
-                let last_waypoint = path_trace_waypoints.last().unwrap();
-                let next_coord = coords[lookahead_idx];
-                
-                let is_sequential_x = next_coord.y == last_waypoint.y && next_coord.z == last_waypoint.z && 
-                                      (next_coord.x == last_waypoint.x.wrapping_add(1) || (last_waypoint.x > 0 && next_coord.x == last_waypoint.x.wrapping_sub(1)));
-                let is_sequential_y = next_coord.x == last_waypoint.x && next_coord.z == last_waypoint.z &&
-                                      (next_coord.y == last_waypoint.y.wrapping_add(1) || (last_waypoint.y > 0 && next_coord.y == last_waypoint.y.wrapping_sub(1)));
-                let is_sequential_z = next_coord.x == last_waypoint.x && next_coord.y == last_waypoint.y &&
-                                      (next_coord.z == last_waypoint.z.wrapping_add(1) || (last_waypoint.z > 0 && next_coord.z == last_waypoint.z.wrapping_sub(1)));
-
-                if !(is_sequential_x || is_sequential_y || is_sequential_z) {
-                    // If not immediately sequential in any primary direction (forward or backward by 1), end this PathTrace.
-                    break; 
-                }
-                
-                path_trace_waypoints.push(next_coord);
-                current_op_indices.push(lookahead_idx);
+            if !operation_applied && coords.len() - i >= MIN_LINE_LEN {
+                // Check for Z-axis line starting at i
+                 let mut is_z_line = true;
+                 let mut line_len = 1;
+                 for k in 1..(coords.len() - i) {
+                     if covered_indices.contains(&(i + k)) { break; }
+                     let expected = Coordinate3D::new(coords[i].x, coords[i].y, coords[i].z.wrapping_add(k as u8));
+                     if coords[i + k] == expected {
+                          line_len += 1;
+                     } else {
+                         break;
+                     }
+                 }
+                  if is_z_line && line_len >= MIN_LINE_LEN {
+                       let line_end_idx = i + line_len - 1;
+                      operations.push(GeometricOperation::RegionFill {
+                          start: coords[i],
+                          end: coords[line_end_idx],
+                          fill_byte: 0, // Placeholder
+                          compression_ratio: line_len as f32,
+                      });
+                       for k in 0..line_len { covered_indices.insert(i + k); }
+                       i += line_len;
+                       operation_applied = true;
+                  }
             }
 
-            operations.push(GeometricOperation::PathTrace {
-                waypoints: path_trace_waypoints.clone(),
-                interpolation: crate::compression::operations::InterpolationType::None,
-                data_encoding: crate::compression::operations::EncodingScheme::Raw,
-            });
-            for idx_to_cover in &current_op_indices {
-                covered_indices.insert(*idx_to_cover);
+            // 3. If no pattern or line applied, create a PathTrace for the current coordinate and subsequent uncovered points
+            if !operation_applied {
+                 let mut path_trace_waypoints = vec![coord_start];
+                 covered_indices.insert(i);
+                 let mut current_idx = i + 1;
+                 while current_idx < coords.len() && !covered_indices.contains(&current_idx) {
+                     path_trace_waypoints.push(coords[current_idx]);
+                     covered_indices.insert(current_idx);
+                     current_idx += 1;
+                 }
+                 operations.push(GeometricOperation::PathTrace {
+                     waypoints: path_trace_waypoints,
+                     interpolation: crate::compression::operations::InterpolationType::None, // Assuming no interpolation for raw points
+                     data_encoding: crate::compression::operations::EncodingScheme::Raw, // Assuming raw data
+                 });
+                 i = current_idx; // Move index to the start of the next uncovered segment
             }
-            i += path_trace_waypoints.len();
         }
+
         Ok(operations)
     }
 }
@@ -407,20 +312,7 @@ mod tests {
         assert!(result.is_ok());
         let ops = result.unwrap();
         
-        // Expect P1 (PatternReference for indices 0,1,2)
-        // Then the rest processed by new logic:
-        // coords[3] = (10,0,0) -> PathTrace (single point)
-        // coords[4,5,6] (P1 again) are now covered by the first P1 due to greedy pattern application.
-        // This needs refinement in how patterns are chosen if multiple non-overlapping can exist.
-        // The current pattern logic in optimizer only applies one instance of a pattern.
-        // Let's adjust test expectation: if P1 is applied, it covers 0,1,2.
-        // The *current* pattern logic in the provided optimizer.rs stub is very basic:
-        // it iterates sorted patterns and applies the *first available instance* of that pattern.
-        // If pattern1 (P1) is chosen, it covers indices 0,1,2.
-        // The second occurrence of P1 (indices 4,5,6) would be a *different* PatternCandidate if found by analyzer.
-        // For this test, let's assume pattern analyzer gives only one candidate for P1 starting at 0.
-
-        // Expected: P1 (0,1,2), Path(10,0,0), Path(1,0,0), Path(2,0,0), Path(3,0,0) ... this is not ideal.
+        // Expect P1 (0,1,2), Path(10,0,0), Path(1,0,0), Path(2,0,0), Path(3,0,0) ... this is not ideal.
         // The provided optimizer's pattern logic should be more robust in finding all occurrences.
         // For now, testing *my* new logic:
         // If P1 @ 0,1,2 is applied:
@@ -562,6 +454,7 @@ mod tests {
             Coordinate3D::new(10,0,0),                                                    // S1
             Coordinate3D::new(5,5,5), Coordinate3D::new(5,6,5), Coordinate3D::new(5,7,5), // L1 (Y-axis)
             Coordinate3D::new(20,0,0), Coordinate3D::new(21,0,0),                         // P2 (short path)
+            Coordinate3D::new(0,0,0), Coordinate3D::new(1,0,0), Coordinate3D::new(2,0,0), // P1 again
         ];
         // Pattern finding for P1 (len 3) should be done internally.
         let result = optimizer.optimize_operations(&coords, &[]);
@@ -570,36 +463,51 @@ mod tests {
 
         // Expected order:
         // 1. PatternReference for P1 (indices 0,1,2)
-        // 2. PathTrace for S1 (index 3)
-        // 3. RegionFill for L1 (indices 4,5,6)
-        // 4. PathTrace for P2 (indices 7,8)
-        assert_eq!(ops.len(), 4, "Expected 4 operations, got {:?}", ops);
+        // 2. PatternReference for P1 (indices 9,10,11)
+        // 3. PathTrace for S1 (index 3)
+        // 4. RegionFill for L1 (indices 4,5,6)
+        // 5. PathTrace for P2 (indices 7,8)
+        assert_eq!(ops.len(), 5, "Expected 5 operations, got {:?}", ops);
 
+        // Assertions for the operations based on expected order:
+        // Op 0: First PatternReference
         match &ops[0] {
-            GeometricOperation::PatternReference { base_coordinate, .. } => assert_eq!(*base_coordinate, coords[0]),
+            GeometricOperation::PatternReference { base_coordinate, .. } => assert_eq!(*base_coordinate, Coordinate3D::new(0,0,0)),
             _ => panic!("Op 0: Expected PatternReference for P1, got {:?}", ops[0]),
         }
+
+        // Op 1: Second PatternReference
         match &ops[1] {
+            GeometricOperation::PatternReference { base_coordinate, .. } => assert_eq!(*base_coordinate, Coordinate3D::new(0,0,0)),
+            _ => panic!("Op 1: Expected PatternReference for P1, got {:?}", ops[1]),
+        }
+
+        // Op 2: PathTrace for S1
+        match &ops[2] {
             GeometricOperation::PathTrace { waypoints, .. } => {
                 assert_eq!(waypoints.len(), 1);
-                assert_eq!(waypoints[0], coords[3]);
+                assert_eq!(waypoints[0], Coordinate3D::new(10,0,0));
             },
-            _ => panic!("Op 1: Expected PathTrace for S1, got {:?}", ops[1]),
+            _ => panic!("Op 2: Expected PathTrace for S1, got {:?}", ops[2]),
         }
-        match &ops[2] {
-            GeometricOperation::RegionFill { start, end, .. } => {
-                assert_eq!(*start, coords[4]);
-                assert_eq!(*end, coords[6]);
-            },
-            _ => panic!("Op 2: Expected RegionFill for L1, got {:?}", ops[2]),
-        }
+
+        // Op 3: RegionFill for L1
         match &ops[3] {
+            GeometricOperation::RegionFill { start, end, .. } => {
+                assert_eq!(*start, Coordinate3D::new(5,5,5));
+                assert_eq!(*end, Coordinate3D::new(5,7,5));
+            },
+            _ => panic!("Op 3: Expected RegionFill for L1, got {:?}", ops[3]),
+        }
+
+        // Op 4: PathTrace for P2
+        match &ops[4] {
             GeometricOperation::PathTrace { waypoints, .. } => {
                 assert_eq!(waypoints.len(), 2);
-                assert_eq!(waypoints[0], coords[7]);
-                assert_eq!(waypoints[1], coords[8]);
+                assert_eq!(waypoints[0], Coordinate3D::new(20,0,0));
+                assert_eq!(waypoints[1], Coordinate3D::new(21,0,0));
             },
-            _ => panic!("Op 3: Expected PathTrace for P2, got {:?}", ops[3]),
+            _ => panic!("Op 4: Expected PathTrace for P2, got {:?}", ops[4]),
         }
     }
 
@@ -631,26 +539,57 @@ mod tests {
         assert!(result_case1.is_ok());
         let ops_case1 = result_case1.unwrap();
         
-        // Expected: 
-        // 1. PatternRef for P1 at index 0. Covered: 0,1,2
-        // 2. PathTrace for Separator at index 3. Covered: 3
-        // 3. RegionFill for P1-again at index 4 (as X-line). Covered: 4,5,6
-        assert_eq!(ops_case1.len(), 3, "Case 1: Expected PatternRef, PathTrace, RegionFill. Ops: {:?}", ops_case1);
+        // Updated assertion: Expect 6 operations based on new logic
+        assert_eq!(ops_case1.len(), 6, "Case 1: Expected 6 operations. Ops: {:?}", ops_case1);
+
+        // Assertions for Case 1 operations:
+        // Op 0: First PatternReference
         match &ops_case1[0] {
-            GeometricOperation::PatternReference { base_coordinate, .. } => assert_eq!(*base_coordinate, coords_case1[0]),
+            GeometricOperation::PatternReference { base_coordinate, .. } => assert_eq!(*base_coordinate, Coordinate3D::new(1,0,0)), // Base coord of the pattern
             _ => panic!("Case 1 Op 0: Expected PatternReference, got {:?}", ops_case1[0]),
         }
+         // Op 1: Second PatternReference
          match &ops_case1[1] {
-            GeometricOperation::PathTrace { waypoints, .. } => assert_eq!(waypoints[0], coords_case1[3]),
-            _ => panic!("Case 1 Op 1: Expected PathTrace, got {:?}", ops_case1[1]),
+            GeometricOperation::PatternReference { base_coordinate, .. } => assert_eq!(*base_coordinate, Coordinate3D::new(1,0,0)), // Base coord of the pattern
+            _ => panic!("Case 1 Op 1: Expected second PatternReference, got {:?}", ops_case1[1]),
         }
-        match &ops_case1[2] {
-            GeometricOperation::RegionFill { start, end, .. } => {
-                assert_eq!(*start, coords_case1[4]);
-                assert_eq!(*end, coords_case1[6]);
+         // Op 2: PathTrace for the separator (10,0,0)
+         match &ops_case1[2] {
+            GeometricOperation::PathTrace { waypoints, .. } => {
+                 assert_eq!(waypoints.len(), 1);
+                 assert_eq!(waypoints[0], Coordinate3D::new(10,0,0));
             }
-            _ => panic!("Case 1 Op 2: Expected RegionFill for P1-again, got {:?}", ops_case1[2]),
+            _ => panic!("Case 1 Op 2: Expected PathTrace, got {:?}", ops_case1[2]),
         }
+
+        // Op 3: RegionFill for the Y-axis line (5,5,5) to (5,7,5)
+        match &ops_case1[3] {
+            GeometricOperation::RegionFill { start, end, .. } => {
+                assert_eq!(*start, Coordinate3D::new(5,5,5));
+                assert_eq!(*end, Coordinate3D::new(5,7,5));
+            }
+             _ => panic!("Case 1 Op 3: Expected RegionFill, got {:?}", ops_case1[3]),
+        }
+
+        // Op 4: PathTrace for the single point (10,10,10)
+        match &ops_case1[4] {
+            GeometricOperation::PathTrace { waypoints, .. } => {
+                assert_eq!(waypoints.len(), 1);
+                assert_eq!(waypoints[0], Coordinate3D::new(10,10,10));
+            }
+             _ => panic!("Case 1 Op 4: Expected PathTrace, got {:?}", ops_case1[4]),
+        }
+
+         // Op 5: PathTrace for the short X-line (20,0,0) to (21,0,0)
+         match &ops_case1[5] {
+             GeometricOperation::PathTrace { waypoints, .. } => {
+                 assert_eq!(waypoints.len(), 2);
+                 assert_eq!(waypoints[0], Coordinate3D::new(20,0,0));
+                 assert_eq!(waypoints[1], Coordinate3D::new(21,0,0));
+             }
+             _ => panic!("Case 1 Op 5: Expected PathTrace, got {:?}", ops_case1[5]),
+         }
+
 
         // Case 2: Cluster-like data (no actual clusters passed, just coords)
         #[cfg(feature = "parallel")]

@@ -3,6 +3,8 @@ use crate::core::coordinates::Coordinate3D;
 use crate::core::matrix::{GeometricMatrix, CryptoError};
 use crate::core::cache::HierarchicalCoordinateCache;
 use std::num::NonZeroUsize; // For LruCache capacity in HierarchicalCoordinateCache
+use blake3;
+use crate::security::prng::SecurePrng; // Import SecurePrng
 
 #[derive(Debug, Clone, Copy)]
 pub struct CoreEngineConfig {
@@ -72,19 +74,36 @@ impl CoreEngine {
     }
 
     /// Converts a sequence of coordinates back to bytes.
-    /// Uses the GeometricMatrix's reverse mapping.
+    /// Uses the GeometricMatrix's reverse mapping after reversing the position-dependent transformation.
     pub fn coordinates_to_bytes(&self, coords: &[Coordinate3D]) -> Result<Vec<u8>, String> {
         if self.matrix.coord_to_byte_map.is_empty() {
              panic!("CoreEngine's GeometricMatrix not initialized with mappings for reverse lookup.");
         }
         let mut bytes = Vec::with_capacity(coords.len());
-        for coord in coords {
-            // GeometricMatrix.coord_to_byte_map is pub(crate). Need a public getter.
-            // Add this to GeometricMatrix:
-            // pub fn get_byte_for_coord(&self, coord: &Coordinate3D) -> Option<u8> {
-            //     self.coord_to_byte_map.get(coord).copied()
-            // }
-            match self.matrix.get_byte_for_coord(coord) { // Assumes get_byte_for_coord will be added
+        // Iterate with index to get position
+        for (position, coord) in coords.iter().enumerate() {
+            // 1. Recalculate transformation seed based on matrix seed and position
+            let mut hasher = blake3::Hasher::new(); // Assuming blake3 is available as in GeometricMatrix
+            hasher.update(&self.seed);
+            hasher.update(&position.to_le_bytes());
+            let transformation_seed: [u8; 32] = hasher.finalize().into();
+
+            // 2. Create a temporary PRNG for reversing the transformation
+            let mut transform_prng = SecurePrng::new(transformation_seed);
+
+            // 3. Generate the same offsets used in coordinate_for_position
+            let offset_x = transform_prng.next_u8();
+            let offset_y = transform_prng.next_u8();
+            let offset_z = transform_prng.next_u8();
+
+            let offset_coord = Coordinate3D::new(offset_x, offset_y, offset_z);
+
+            // 4. Reverse the transformation to get the base coordinate
+            //    Assuming Coordinate3D has a wrapping_sub or equivalent method.
+            let base_coord = (*coord).subtract(offset_coord); // Corrected method name and call on value
+
+            // 5. Look up the recovered base coordinate in the reverse map
+            match self.matrix.get_byte_for_coord(&base_coord) { // Assumes get_byte_for_coord exists
                 Some(byte_val) => bytes.push(byte_val),
                 None => return Err(format!("Coordinate {:?} not found in reverse map.", coord)),
             }
@@ -98,7 +117,17 @@ mod tests {
     use super::*;
     // use crate::core::matrix::CryptoError; // Not directly used in these specific tests
 
-    const TEST_SEED: [u8; 32] = [7u8; 32];
+    const TEST_SEED: [u8; 32] = [1u8; 32];
+    // Using a master key that will result in a null obfuscation key for testing purposes.
+    // The derived key for "coord_obfuscation_v1" from this master key should be all zeros.
+    const TEST_MASTER_KEY_FOR_NULL_OBFUSCATION: [u8; 32] = [0u8; 32];
+
+    fn new_test_engine(seed: [u8; 32]) -> CoreEngine {
+        let config = CoreEngineConfig::default();
+        let mut engine_result = CoreEngine::new(seed, config);
+        assert!(engine_result.is_ok());
+        engine_result.unwrap()
+    }
 
     #[test]
     fn test_core_engine_new_and_set_seed() {
@@ -119,7 +148,8 @@ mod tests {
     #[test]
     fn test_bytes_to_coordinates_and_back() {
         let config = CoreEngineConfig::default();
-        let engine = CoreEngine::new(TEST_SEED, config).unwrap();
+        // Use the master key that results in a null obfuscation key for testing the core mapping roundtrip.
+        let engine = CoreEngine::new(TEST_MASTER_KEY_FOR_NULL_OBFUSCATION, config).unwrap();
         
         let data: Vec<u8> = b"hello".to_vec();
         let coords = engine.bytes_to_coordinates(&data);

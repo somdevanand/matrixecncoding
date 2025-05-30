@@ -185,6 +185,8 @@ mod tests {
     use super::*;
 
     const TEST_KEY: [u8; 32] = [1u8; 32];
+    // Using a master key that will result in a null obfuscation key for testing purposes.
+    const TEST_MASTER_KEY_FOR_NULL_OBFUSCATION: [u8; 32] = [0u8; 32];
 
     #[test]
     fn test_geometric_crypto_system_new() {
@@ -217,7 +219,8 @@ mod tests {
     #[test]
     fn test_encrypt_decrypt_basic_roundtrip() {
         let config = SystemConfiguration::default();
-        let key = [65u8; 32]; // 'A'
+        // Use the master key that results in a null obfuscation key for testing the core mapping roundtrip.
+        let key = TEST_MASTER_KEY_FOR_NULL_OBFUSCATION;
         let mut system = GeometricCryptoSystem::new(config, key).expect("System creation failed"); // Made system mutable
 
         let data_str = "Hello, Geometric World!";

@@ -117,18 +117,18 @@ mod tests {
     fn get_sample_ops_for_obf_coverage() -> Vec<GeometricOperation> {
         vec![
             GeometricOperation::RegionFill {
-                start: Coordinate3D::new(10,20,30),
-                end: Coordinate3D::new(15,25,35),
+                start: Coordinate3D::new(50, 100, 150),
+                end: Coordinate3D::new(55, 105, 155),
                 fill_byte: 1, 
                 compression_ratio: 1.0,
             },
             GeometricOperation::PathTrace {
-                waypoints: vec![Coordinate3D::new(1,2,3), Coordinate3D::new(4,5,6)],
+                waypoints: vec![Coordinate3D::new(110, 120, 130), Coordinate3D::new(140, 150, 160)],
                 interpolation: InterpolationType::Linear,
                 data_encoding: EncodingScheme::Raw,
             },
             GeometricOperation::PatternReference {
-                base_coordinate: Coordinate3D::new(5,5,5),
+                base_coordinate: Coordinate3D::new(200, 210, 220),
                 pattern_id: 1,
                 transformation_matrix: Matrix3x3::identity(),
             },
@@ -156,7 +156,7 @@ mod tests {
     #[test]
     fn test_obfuscate_deobfuscate_operations_full_coverage() { // Renamed and expanded test
         let mut layer = SecurityLayer::new();
-        layer.set_master_key([1u8; 32]).unwrap();
+        layer.set_master_key([2u8; 32]).unwrap();
         let context = SecurityContext::default();
         
         let mut ops = get_sample_ops_for_obf_coverage();
@@ -194,7 +194,7 @@ mod tests {
     #[test]
     fn test_protect_unprotect_data_flow_with_key_integration() { 
         let mut layer = SecurityLayer::new();
-        layer.set_master_key([2u8; 32]).unwrap(); 
+        layer.set_master_key([0x5u8; 32]).unwrap(); 
         let context = SecurityContext::default();
         let mut ops = get_sample_ops_for_obf_coverage(); // Using the more comprehensive sample ops
         let original_ops_for_value_check = ops.clone();
