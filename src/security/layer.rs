@@ -160,7 +160,7 @@ mod tests {
         let context = SecurityContext::default();
         
         let mut ops = get_sample_ops_for_obf_coverage();
-        let original_ops = ops.clone();
+        let original_ops = ops.clone(); // Clone before obfuscation
 
         layer.obfuscate_geometric_operations(&mut ops, &context).expect("Obfuscation failed");
 
@@ -197,25 +197,19 @@ mod tests {
         layer.set_master_key([0x5u8; 32]).unwrap(); 
         let context = SecurityContext::default();
         let mut ops = get_sample_ops_for_obf_coverage(); // Using the more comprehensive sample ops
-        let original_ops_for_value_check = ops.clone();
+        let original_ops_for_value_check = ops.clone(); // Clone before protect
 
         let proof = layer.protect_data(&mut ops, &context).expect("Protect failed");
         
-         if !original_ops_for_value_check.is_empty() {
-            let mut changed = false;
-            // Simplified check: just check if the first op (if any) is different.
-            // A more robust check might compare each element or a hash.
-            if ops[0] != original_ops_for_value_check[0] {
-                changed = true;
-            }
-            assert!(changed, "Ops should be obfuscated by protect_data for non-trivial cases");
-        }
+        // Assert that operations have been obfuscated (changed from original)
+        assert_ne!(ops, original_ops_for_value_check, "Operations should be obfuscated by protect_data");
 
         let unprotect_result = layer.unprotect_data(&mut ops, &proof, &context);
         assert!(unprotect_result.is_ok(), "Unprotect failed: {:?}", unprotect_result.err());
         assert_eq!(ops, original_ops_for_value_check, "Unprotect_data did not restore original");
 
-        layer.obfuscate_geometric_operations(&mut ops, &context).unwrap();
+        // Test tampering
+        layer.obfuscate_geometric_operations(&mut ops, &context).unwrap(); // Re-obfuscate for tampering test
         let mut tampered_proof_bytes = proof.0.clone();
         if !tampered_proof_bytes.is_empty() { tampered_proof_bytes[0] ^= 0xFF; } else { tampered_proof_bytes.push(1); }
         let tampered_proof = IntegrityProof(tampered_proof_bytes);
