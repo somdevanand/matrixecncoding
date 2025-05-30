@@ -216,20 +216,13 @@ impl OperationOptimizer {
 
             // 3. If no pattern or line applied, create a PathTrace for the current coordinate and subsequent uncovered points
             if !operation_applied {
-                 let mut path_trace_waypoints = vec![coord_start];
-                 covered_indices.insert(i);
-                 let mut current_idx = i + 1;
-                 while current_idx < coords.len() && !covered_indices.contains(&current_idx) {
-                     path_trace_waypoints.push(coords[current_idx]);
-                     covered_indices.insert(current_idx);
-                     current_idx += 1;
-                 }
                  operations.push(GeometricOperation::PathTrace {
-                     waypoints: path_trace_waypoints,
-                     interpolation: crate::compression::operations::InterpolationType::None, // Assuming no interpolation for raw points
-                     data_encoding: crate::compression::operations::EncodingScheme::Raw, // Assuming raw data
+                     waypoints: vec![coord_start], // coord_start is coords[i]
+                     interpolation: crate::compression::operations::InterpolationType::None,
+                     data_encoding: crate::compression::operations::EncodingScheme::Raw,
                  });
-                 i = current_idx; // Move index to the start of the next uncovered segment
+                 covered_indices.insert(i); // Mark current point as covered
+                 i += 1; // Advance by one point
             }
         }
 
@@ -262,9 +255,9 @@ mod tests {
     // Helper to create optimizer for tests, assuming non-parallel for most optimizer logic tests
     fn create_test_optimizer() -> OperationOptimizer {
         #[cfg(feature = "parallel")]
-        return OperationOptimizer::new(4, 32, false, None);
+        return OperationOptimizer::new(3, 32, false, None); // min_pattern_window changed to 3
         #[cfg(not(feature = "parallel"))]
-        return OperationOptimizer::new(4, 32);
+        return OperationOptimizer::new(3, 32); // min_pattern_window changed to 3
     }
 
     #[test]

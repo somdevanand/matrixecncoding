@@ -55,11 +55,16 @@ impl CoordinateObfuscator {
         if obfuscation_key_slice.is_empty() {
             return Err(SecurityError::ObfuscationError("Obfuscation key is empty".to_string()));
         }
-        let key_byte = obfuscation_key_slice[0]; // Use first byte of slice for simplicity
 
-        for coord in coords.iter_mut() {
-            Self::apply_byte_op(coord, key_byte, u8::wrapping_add);
-            self.apply_non_linear_dispersion(coord, key_byte.rotate_left(4), true);
+        for (i, coord) in coords.iter_mut().enumerate() {
+            let key_byte_for_this_coord = obfuscation_key_slice[i % obfuscation_key_slice.len()];
+
+            let effective_key_for_byte_op = if key_byte_for_this_coord == 0 { 1 } else { key_byte_for_this_coord };
+            Self::apply_byte_op(coord, effective_key_for_byte_op, u8::wrapping_add);
+
+            let disp_arg_key = key_byte_for_this_coord.rotate_left(4);
+            let effective_key_for_dispersion = if disp_arg_key == 0 { 1 } else { disp_arg_key };
+            self.apply_non_linear_dispersion(coord, effective_key_for_dispersion, true);
         }
         Ok(())
     }
@@ -72,11 +77,16 @@ impl CoordinateObfuscator {
         if obfuscation_key_slice.is_empty() {
             return Err(SecurityError::ObfuscationError("Obfuscation key is empty".to_string()));
         }
-        let key_byte = obfuscation_key_slice[0];
 
-        for coord in coords.iter_mut() {
-            self.apply_non_linear_dispersion(coord, key_byte.rotate_left(4), false);
-            Self::apply_byte_op(coord, key_byte, u8::wrapping_sub);
+        for (i, coord) in coords.iter_mut().enumerate() {
+            let key_byte_for_this_coord = obfuscation_key_slice[i % obfuscation_key_slice.len()];
+
+            let disp_arg_key = key_byte_for_this_coord.rotate_left(4);
+            let effective_key_for_dispersion = if disp_arg_key == 0 { 1 } else { disp_arg_key };
+            self.apply_non_linear_dispersion(coord, effective_key_for_dispersion, false); // disperse is false
+
+            let effective_key_for_byte_op = if key_byte_for_this_coord == 0 { 1 } else { key_byte_for_this_coord };
+            Self::apply_byte_op(coord, effective_key_for_byte_op, u8::wrapping_sub); // op is wrapping_sub
         }
         Ok(())
     }

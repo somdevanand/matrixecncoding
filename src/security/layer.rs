@@ -32,13 +32,18 @@ impl SecurityLayer {
         for op in operations.iter_mut() {
             match op {
                 GeometricOperation::RegionFill { ref mut start, ref mut end, .. } => {
-                    self.obfuscator.obfuscate_coordinates(&mut [*start, *end], &obf_key)?;
+                    let mut temp_coords = [*start, *end];
+                    self.obfuscator.obfuscate_coordinates(&mut temp_coords, &obf_key)?;
+                    *start = temp_coords[0];
+                    *end = temp_coords[1];
                 }
                 GeometricOperation::PathTrace { ref mut waypoints, .. } => {
                     self.obfuscator.obfuscate_coordinates(waypoints, &obf_key)?;
                 }
                 GeometricOperation::PatternReference { ref mut base_coordinate, .. } => {
-                    self.obfuscator.obfuscate_coordinates(&mut [*base_coordinate], &obf_key)?;
+                    let mut temp_coord_array = [*base_coordinate];
+                    self.obfuscator.obfuscate_coordinates(&mut temp_coord_array, &obf_key)?;
+                    *base_coordinate = temp_coord_array[0];
                 }
                 GeometricOperation::SparseMapping { ref coordinate_deltas, .. } => {
                     // CoordinateDeltas are relative offsets (i8). Obfuscating them directly
@@ -68,13 +73,18 @@ impl SecurityLayer {
         for op in operations.iter_mut() {
             match op {
                 GeometricOperation::RegionFill { ref mut start, ref mut end, .. } => {
-                    self.obfuscator.deobfuscate_coordinates(&mut [*start, *end], &obf_key)?;
+                    let mut temp_coords = [*start, *end];
+                    self.obfuscator.deobfuscate_coordinates(&mut temp_coords, &obf_key)?; // Call deobfuscate_coordinates
+                    *start = temp_coords[0];
+                    *end = temp_coords[1];
                 }
                 GeometricOperation::PathTrace { ref mut waypoints, .. } => {
                     self.obfuscator.deobfuscate_coordinates(waypoints, &obf_key)?;
                 }
                 GeometricOperation::PatternReference { ref mut base_coordinate, .. } => {
-                    self.obfuscator.deobfuscate_coordinates(&mut [*base_coordinate], &obf_key)?;
+                    let mut temp_coord_array = [*base_coordinate];
+                    self.obfuscator.deobfuscate_coordinates(&mut temp_coord_array, &obf_key)?; // Call deobfuscate_coordinates
+                    *base_coordinate = temp_coord_array[0];
                 }
                 GeometricOperation::SparseMapping { .. } => {
                     // See notes in obfuscate_geometric_operations. No action.
