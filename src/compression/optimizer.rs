@@ -1,9 +1,9 @@
 use crate::core::coordinates::Coordinate3D;
-use crate::compression::operations::{GeometricOperation, Matrix3x3}; // Assuming fill_byte change is in operations.rs
+use crate::compression::operations::{GeometricOperation, InterpolationType, EncodingScheme, Matrix3x3};
 use crate::compression::pattern_analyzer::PatternCandidate;
 use crate::compression::engine::CompressionError;
-use std::collections::HashSet; 
-use crate::compression::operations::{InterpolationType, EncodingScheme};
+use std::collections::HashSet;
+
 
 #[cfg(feature = "parallel")]
 use crate::core::parallel_processor::{ParallelProcessor, ParallelConfig};
@@ -71,29 +71,30 @@ impl OperationOptimizer {
     /// Optimizes operations using an enhanced greedy approach.
     pub fn optimize_operations(
         &self,
-        coords: &[Coordinate3D], // Original coordinates
-        // patterns: &[PatternCandidate], // Patterns will be found internally now
-        clusters: &[Vec<Coordinate3D>], // Clusters are still passed in
+        coords: &[Coordinate3D],
+        clusters: &[Vec<Coordinate3D>],
     ) -> Result<Vec<GeometricOperation>, CompressionError> {
         let mut operations: Vec<GeometricOperation> = Vec::new();
-        let mut covered_indices: HashSet<usize> = HashSet::new(); 
+        let mut covered_indices: HashSet<usize> = HashSet::new();
 
-        // Find and prioritize patterns candidates once
+        // 1. Find and prioritize patterns FIRST
         let mut sorted_patterns = self.find_patterns_for_optimizer(coords)?;
-        sorted_patterns.sort_by(|a, b| b.compression_potential.partial_cmp(&a.compression_potential).unwrap_or(std::cmp::Ordering::Equal));
+        sorted_patterns.sort_by(|a, b| 
+            b.compression_potential.partial_cmp(&a.compression_potential)
+             .unwrap_or(std::cmp::Ordering::Equal)
+        );
 
-        // 1. Process all pattern occurrences
+        // 2. Process all pattern occurrences
         for pattern_candidate in sorted_patterns.iter() {
             let pattern_len = pattern_candidate.coordinates.len();
             if pattern_len == 0 { continue; }
 
-            // Find all occurrences of this pattern
-            for i in 0..=coords.len().saturating_sub(pattern_len) {
-                // Check if the segment from i matches the pattern and is not covered
+            let mut i = 0;
+            while i <= coords.len().saturating_sub(pattern_len) {
                 let mut is_match = true;
                 let mut segment_covered = false;
                 for k in 0..pattern_len {
-                    if coords[i + k] != pattern_candidate.coordinates[k] {
+                    if i + k >= coords.len() || coords[i + k] != pattern_candidate.coordinates[k] {
                         is_match = false;
                         break;
                     }
@@ -102,39 +103,69 @@ impl OperationOptimizer {
                         break;
                     }
                 }
-
                 if is_match && !segment_covered {
-                    // Apply PatternReference for this occurrence
-                     operations.push(GeometricOperation::PatternReference {
-                        base_coordinate: coords[i], 
-                        pattern_id: 0, // Placeholder ID - ideally unique per pattern type
-                        transformation_matrix: Matrix3x3::identity(), // Assuming no transformations yet
+                    operations.push(GeometricOperation::PatternReference {
+                        base_coordinate: coords[i],
+                        pattern_id: 0, // In a real implementation, use a unique pattern ID
+                        transformation_matrix: Matrix3x3::identity(),
                     });
-                    // Mark indices covered by this occurrence
                     for k in 0..pattern_len {
                         covered_indices.insert(i + k);
+                    }
+                    i += pattern_len;
+                } else {
+                    i += 1;
+                }
+            }
+        }
+
+        // 3. Process clusters if provided (for uncovered points)
+        for cluster in clusters {
+            if cluster.is_empty() {
+                continue;
+            }
+            let all_uncovered = cluster.iter().all(|c| {
+                coords.iter().position(|&x| x == *c)
+                    .map(|idx| !covered_indices.contains(&idx))
+                    .unwrap_or(false)
+            });
+            if all_uncovered {
+                let mut uncovered_points = Vec::new();
+                for coord in cluster {
+                    if let Some(idx) = coords.iter().position(|&x| x == *coord) {
+                        if !covered_indices.contains(&idx) {
+                            uncovered_points.push(*coord);
+                        }
+                    }
+                }
+                if !uncovered_points.is_empty() {
+                    operations.push(GeometricOperation::PathTrace {
+                        waypoints: uncovered_points,
+                        interpolation: InterpolationType::None,
+                        data_encoding: EncodingScheme::Raw,
+                    });
+                }
+                for coord in cluster {
+                    if let Some(idx) = coords.iter().position(|&x| x == *coord) {
+                        covered_indices.insert(idx);
                     }
                 }
             }
         }
 
-        // 2. Process remaining uncovered coordinates for lines and paths
+        // 4. Process remaining uncovered coordinates for lines and paths
         let mut i = 0;
         const MIN_LINE_LEN: usize = 3;
-
         while i < coords.len() {
             if covered_indices.contains(&i) {
                 i += 1;
                 continue;
             }
-
             let coord_start = coords[i];
             let mut operation_applied = false;
-
             // Check for Lines (RegionFill)
             if coords.len() - i >= MIN_LINE_LEN {
                 let mut line_len = 1;
-                // Check X-axis line
                 for k in 1..(coords.len() - i) {
                     if covered_indices.contains(&(i + k)) { break; }
                     let expected = Coordinate3D::new(coords[i].x.wrapping_add(k as u8), coords[i].y, coords[i].z);
@@ -146,101 +177,83 @@ impl OperationOptimizer {
                 }
                 if line_len >= MIN_LINE_LEN {
                     let line_end_idx = i + line_len - 1;
-                     operations.push(GeometricOperation::RegionFill {
-                         start: coords[i],
-                         end: coords[line_end_idx],
-                         fill_byte: 0, // Placeholder
-                         compression_ratio: line_len as f32, // Simple ratio
-                     });
-                      for k in 0..line_len { covered_indices.insert(i + k); }
-                      i += line_len;
-                      operation_applied = true;
-                 }
+                    operations.push(GeometricOperation::RegionFill {
+                        start: coords[i],
+                        end: coords[line_end_idx],
+                        fill_byte: 0,
+                        compression_ratio: line_len as f32,
+                    });
+                    for k in 0..line_len { covered_indices.insert(i + k); }
+                    i += line_len;
+                    operation_applied = true;
+                }
             }
-            
             if !operation_applied && coords.len() - i >= MIN_LINE_LEN {
-                 let mut line_len = 1;
-                 // Check Y-axis line
-                 for k in 1..(coords.len() - i) {
-                     if covered_indices.contains(&(i + k)) { break; }
-                     let expected = Coordinate3D::new(coords[i].x, coords[i].y.wrapping_add(k as u8), coords[i].z);
-                     if coords[i + k] == expected {
-                         line_len += 1;
-                     } else {
-                         break;
-                     }
-                 }
-                 if line_len >= MIN_LINE_LEN {
-                       let line_end_idx = i + line_len - 1;
-                      operations.push(GeometricOperation::RegionFill {
-                          start: coords[i],
-                          end: coords[line_end_idx],
-                          fill_byte: 0, // Placeholder
-                          compression_ratio: line_len as f32, // Simple ratio
-                      });
-                       for k in 0..line_len { covered_indices.insert(i + k); }
-                       i += line_len;
-                       operation_applied = true;
-                 }
+                let mut line_len = 1;
+                for k in 1..(coords.len() - i) {
+                    if covered_indices.contains(&(i + k)) { break; }
+                    let expected = Coordinate3D::new(coords[i].x, coords[i].y.wrapping_add(k as u8), coords[i].z);
+                    if coords[i + k] == expected {
+                        line_len += 1;
+                    } else {
+                        break;
+                    }
+                }
+                if line_len >= MIN_LINE_LEN {
+                    let line_end_idx = i + line_len - 1;
+                    operations.push(GeometricOperation::RegionFill {
+                        start: coords[i],
+                        end: coords[line_end_idx],
+                        fill_byte: 0,
+                        compression_ratio: line_len as f32,
+                    });
+                    for k in 0..line_len { covered_indices.insert(i + k); }
+                    i += line_len;
+                    operation_applied = true;
+                }
             }
-
             if !operation_applied && coords.len() - i >= MIN_LINE_LEN {
-                 let mut line_len = 1;
-                 // Check Z-axis line
-                 for k in 1..(coords.len() - i) {
-                     if covered_indices.contains(&(i + k)) { break; }
-                     let expected = Coordinate3D::new(coords[i].x, coords[i].y, coords[i].z.wrapping_add(k as u8));
-                     if coords[i + k] == expected {
-                          line_len += 1;
-                     } else {
-                         break;
-                     }
-                 }
-                 if line_len >= MIN_LINE_LEN {
-                       let line_end_idx = i + line_len - 1;
-                      operations.push(GeometricOperation::RegionFill {
-                          start: coords[i],
-                          end: coords[line_end_idx],
-                          fill_byte: 0, // Placeholder
-                          compression_ratio: line_len as f32, // Simple ratio
-                      });
-                       for k in 0..line_len { covered_indices.insert(i + k); }
-                       i += line_len;
-                       operation_applied = true;
-                 }
+                let mut line_len = 1;
+                for k in 1..(coords.len() - i) {
+                    if covered_indices.contains(&(i + k)) { break; }
+                    let expected = Coordinate3D::new(coords[i].x, coords[i].y, coords[i].z.wrapping_add(k as u8));
+                    if coords[i + k] == expected {
+                        line_len += 1;
+                    } else {
+                        break;
+                    }
+                }
+                if line_len >= MIN_LINE_LEN {
+                    let line_end_idx = i + line_len - 1;
+                    operations.push(GeometricOperation::RegionFill {
+                        start: coords[i],
+                        end: coords[line_end_idx],
+                        fill_byte: 0,
+                        compression_ratio: line_len as f32,
+                    });
+                    for k in 0..line_len { covered_indices.insert(i + k); }
+                    i += line_len;
+                    operation_applied = true;
+                }
             }
-
-            // 3. If not covered by pattern or line, process remaining uncovered points
             if !operation_applied {
-                 let mut path_trace_waypoints = vec![];
-                 let mut current_idx = i;
-                 // Collect consecutive uncovered points into a PathTrace
-                 while current_idx < coords.len() && !covered_indices.contains(&current_idx) {
-                     path_trace_waypoints.push(coords[current_idx]);
-                     // Mark as covered as they are added to the potential PathTrace
-                     covered_indices.insert(current_idx);
-                     current_idx += 1;
-                 }
-
-                 // If any uncovered points were collected, create a PathTrace.
-                 // This loop correctly handles both single points (waypoint list of size 1)
-                 // and consecutive sequences.
-                 if !path_trace_waypoints.is_empty() {
-                     operations.push(GeometricOperation::PathTrace {
-                         waypoints: path_trace_waypoints,
-                         interpolation: InterpolationType::None,
-                         data_encoding: EncodingScheme::Raw,
-                     });
-                 }
-                 // The main while loop will continue from the next uncovered index, or the end if all were covered.
-                 // current_idx is already at the start of the next potential segment (either covered or end).
-                 i = current_idx;
+                let mut path_trace_waypoints = vec![];
+                let mut current_idx = i;
+                while current_idx < coords.len() && !covered_indices.contains(&current_idx) {
+                    path_trace_waypoints.push(coords[current_idx]);
+                    covered_indices.insert(current_idx);
+                    current_idx += 1;
+                }
+                if !path_trace_waypoints.is_empty() {
+                    operations.push(GeometricOperation::PathTrace {
+                        waypoints: path_trace_waypoints,
+                        interpolation: InterpolationType::None,
+                        data_encoding: EncodingScheme::Raw,
+                    });
+                }
+                i = current_idx;
             }
         }
-
-        // Optional: Sort operations for determinism or other criteria if needed
-        // operations.sort_by(...);
-
         Ok(operations)
     }
 }
@@ -249,9 +262,7 @@ impl OperationOptimizer {
 mod tests {
     use super::*;
     use crate::core::coordinates::Coordinate3D;
-    use crate::compression::pattern_analyzer::PatternCandidate;
-    use crate::compression::operations::{GeometricOperation, InterpolationType, EncodingScheme, Matrix3x3, CoordinateDelta, CompressedValues, MathFunction, CoordinateRegion, TrigFuncType};
-    use crate::compression::engine::CompressionError;
+    use crate::compression::operations::{GeometricOperation, InterpolationType, EncodingScheme};
 
     #[cfg(feature = "parallel")]
     use crate::core::parallel_processor::ParallelConfig;
@@ -311,9 +322,8 @@ mod tests {
         // Expected operations after optimization:
         // 1. PatternReference for the first P1 instance at index 0
         // 2. PatternReference for the second P1 instance at index 6
-        // 3. PathTrace for the separator at index 3
-        // 4. PathTrace for the short Y-Line at indices 4, 5
-        assert_eq!(ops.len(), 4, "Expected 4 operations, got {:?}", ops);
+        // 3. PathTrace for the separator and short Y-Line at indices 3, 4, 5 (consecutive uncovered points)
+        assert_eq!(ops.len(), 3, "Expected 3 operations, got {:?}", ops);
 
         // Assertions for the operations based on expected order:
         // Op 0: First PatternReference for P1
@@ -328,23 +338,15 @@ mod tests {
             _ => panic!("Op 1: Expected second PatternReference for P1, got {:?}", ops[1]),
         }
 
-        // Op 2: PathTrace for Separator
+        // Op 2: PathTrace for Separator and Short Y-Line (consecutive uncovered points)
         match &ops[2] {
             GeometricOperation::PathTrace { waypoints, .. } => {
-                assert_eq!(waypoints.len(), 1);
-                assert_eq!(waypoints[0], Coordinate3D::new(10,0,0));
+                assert_eq!(waypoints.len(), 3);
+                assert_eq!(waypoints[0], Coordinate3D::new(10,0,0)); // Separator
+                assert_eq!(waypoints[1], Coordinate3D::new(5,5,5));  // First Y-line point
+                assert_eq!(waypoints[2], Coordinate3D::new(5,6,5));  // Second Y-line point
             },
-            _ => panic!("Op 2: Expected PathTrace for Separator, got {:?}", ops[2]),
-        }
-
-        // Op 3: PathTrace for Short Y-Line
-        match &ops[3] {
-            GeometricOperation::PathTrace { waypoints, .. } => {
-                assert_eq!(waypoints.len(), 2);
-                assert_eq!(waypoints[0], Coordinate3D::new(5,5,5));
-                assert_eq!(waypoints[1], Coordinate3D::new(5,6,5));
-            },
-            _ => panic!("Op 3: Expected PathTrace for Short Y-Line, got {:?}", ops[3]),
+            _ => panic!("Op 2: Expected PathTrace for consecutive uncovered points, got {:?}", ops[2]),
         }
     }
 
@@ -430,16 +432,14 @@ mod tests {
         let result = optimizer.optimize_operations(&coords, &[]);
         assert!(result.is_ok());
         let ops = result.unwrap();
-        // Expected: Three PathTraces, each with one waypoint
-        assert_eq!(ops.len(), 3, "Expected 3 operations, got {:?}", ops);
-        for (idx, op) in ops.iter().enumerate() {
-            match op {
-                GeometricOperation::PathTrace { waypoints, .. } => {
-                    assert_eq!(waypoints.len(), 1);
-                    assert_eq!(waypoints[0], coords[idx]);
-                }
-                _ => panic!("Expected PathTrace for individual point, got {:?}", op),
+        // Expected: A single PathTrace with all waypoints
+        assert_eq!(ops.len(), 1, "Expected 1 PathTrace operation, got {:?}", ops);
+        match &ops[0] {
+            GeometricOperation::PathTrace { waypoints, .. } => {
+                assert_eq!(waypoints.len(), 3, "Expected 3 waypoints in the PathTrace");
+                assert_eq!(waypoints, &coords, "Waypoints don't match input coordinates");
             }
+            _ => panic!("Expected PathTrace operation, got {:?}", ops[0]),
         }
     }
 
@@ -466,10 +466,8 @@ mod tests {
         // 1. PatternReference for P1 (indices 0,1,2)
         // 2. PatternReference for P1 (indices 9,10,11)
         // Then the remaining uncovered points are processed sequentially:
-        // 3. PathTrace for S1 (index 3)
-        // 4. RegionFill for L1 (indices 4,5,6)
-        // 5. PathTrace for P2 (indices 7,8)
-        assert_eq!(ops.len(), 5, "Expected 5 operations, got {:?}", ops);
+        // 3. PathTrace for all remaining uncovered points (indices 3,4,5,6,7,8) - consecutive uncovered points
+        assert_eq!(ops.len(), 3, "Expected 3 operations, got {:?}", ops);
 
         // Assertions for the operations based on expected order:
         // Op 0: First PatternReference
@@ -484,32 +482,18 @@ mod tests {
             _ => panic!("Op 1: Expected second PatternReference for P1, got {:?}", ops[1]),
         }
 
-        // Op 2: PathTrace for S1
+        // Op 2: PathTrace for all remaining uncovered points
         match &ops[2] {
             GeometricOperation::PathTrace { waypoints, .. } => {
-                assert_eq!(waypoints.len(), 1);
-                assert_eq!(waypoints[0], Coordinate3D::new(10,0,0));
+                assert_eq!(waypoints.len(), 6);
+                assert_eq!(waypoints[0], Coordinate3D::new(10,0,0)); // S1
+                assert_eq!(waypoints[1], Coordinate3D::new(5,5,5));  // L1 start
+                assert_eq!(waypoints[2], Coordinate3D::new(5,6,5));  // L1 middle
+                assert_eq!(waypoints[3], Coordinate3D::new(5,7,5));  // L1 end
+                assert_eq!(waypoints[4], Coordinate3D::new(20,0,0)); // P2 start
+                assert_eq!(waypoints[5], Coordinate3D::new(21,0,0)); // P2 end
             },
-            _ => panic!("Op 2: Expected PathTrace for S1, got {:?}", ops[2]),
-        }
-
-        // Op 3: RegionFill for L1
-        match &ops[3] {
-            GeometricOperation::RegionFill { start, end, .. } => {
-                assert_eq!(*start, Coordinate3D::new(5,5,5));
-                assert_eq!(*end, Coordinate3D::new(5,7,5));
-            },
-            _ => panic!("Op 3: Expected RegionFill for L1, got {:?}", ops[3]),
-        }
-
-        // Op 4: PathTrace for P2
-        match &ops[4] {
-            GeometricOperation::PathTrace { waypoints, .. } => {
-                assert_eq!(waypoints.len(), 2);
-                assert_eq!(waypoints[0], Coordinate3D::new(20,0,0));
-                assert_eq!(waypoints[1], Coordinate3D::new(21,0,0));
-            },
-            _ => panic!("Op 4: Expected PathTrace for P2, got {:?}", ops[4]),
+            _ => panic!("Op 2: Expected PathTrace for all remaining uncovered points, got {:?}", ops[2]),
         }
     }
 
@@ -563,30 +547,22 @@ mod tests {
         let cluster_coords_as_main = vec![Coordinate3D::new(10,0,0), Coordinate3D::new(11,0,0), Coordinate3D::new(10,1,0)];
         // No patterns of length 2 are present in cluster_coords_as_main.
         // Expected operations:
-        // 1. PathTrace for (10,0,0), (11,0,0)
-        // 2. PathTrace for (10,1,0)
+        // 1. PathTrace for all three points (consecutive uncovered points)
 
         let result_cluster_as_main = optimizer_case2.optimize_operations(&cluster_coords_as_main, &[]);
         assert!(result_cluster_as_main.is_ok());
         let ops_cluster_as_main = result_cluster_as_main.unwrap();
         
-        assert_eq!(ops_cluster_as_main.len(), 2, "Case 2: Expected 2 PathTraces for the cluster_coords. Ops: {:?}", ops_cluster_as_main);
+        assert_eq!(ops_cluster_as_main.len(), 1, "Case 2: Expected 1 PathTrace for the cluster_coords. Ops: {:?}", ops_cluster_as_main);
         
         match &ops_cluster_as_main[0] {
             GeometricOperation::PathTrace { waypoints, .. } => {
-                 assert_eq!(waypoints.len(), 2);
+                 assert_eq!(waypoints.len(), 3);
                  assert_eq!(waypoints[0], cluster_coords_as_main[0]);
                  assert_eq!(waypoints[1], cluster_coords_as_main[1]);
+                 assert_eq!(waypoints[2], cluster_coords_as_main[2]);
             }
             _ => panic!("Case 2 Op 0: Expected PathTrace, got {:?}", ops_cluster_as_main[0]),
         }
-
-         match &ops_cluster_as_main[1] {
-            GeometricOperation::PathTrace { waypoints, .. } => {
-                 assert_eq!(waypoints.len(), 1);
-                 assert_eq!(waypoints[0], cluster_coords_as_main[2]);
-            }
-            _ => panic!("Case 2 Op 1: Expected PathTrace, got {:?}", ops_cluster_as_main[1]),
-         }
     }
 }

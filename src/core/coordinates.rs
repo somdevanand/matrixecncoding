@@ -1,5 +1,4 @@
 use serde::{Serialize, Deserialize};
-use std::cmp::Ordering; // For manual Ord implementation if needed
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default, PartialOrd, Ord)]
 pub struct Coordinate3D {

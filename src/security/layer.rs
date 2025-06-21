@@ -27,18 +27,28 @@ impl SecurityLayer {
         Ok(())
     }
 
-    pub fn obfuscate_geometric_operations( &self, operations: &mut Vec<GeometricOperation>, _context: &SecurityContext ) -> Result<(), SecurityError> {
-        let obf_key = self.key_manager.get_derived_key(b"coord_obfuscation_v1" )?;
+    pub fn obfuscate_geometric_operations(
+        &self,
+        operations: &mut Vec<GeometricOperation>,
+        _context: &SecurityContext,
+    ) -> Result<(), SecurityError> {
+        let obf_key = self.key_manager.get_derived_key(b"coord_obfuscation_v1")?;
+        
         for op in operations.iter_mut() {
             match op {
-                GeometricOperation::RegionFill { ref mut start, ref mut end, .. } => {
-                    self.obfuscator.obfuscate_coordinates(&mut [*start, *end], &obf_key)?;
+                GeometricOperation::RegionFill { start, end, .. } => {
+                    let mut coords = [*start, *end];
+                    self.obfuscator.obfuscate_coordinates(&mut coords, &obf_key)?;
+                    *start = coords[0];
+                    *end = coords[1];
                 }
-                GeometricOperation::PathTrace { ref mut waypoints, .. } => {
+                GeometricOperation::PathTrace { waypoints, .. } => {
                     self.obfuscator.obfuscate_coordinates(waypoints, &obf_key)?;
                 }
-                GeometricOperation::PatternReference { ref mut base_coordinate, .. } => {
-                    self.obfuscator.obfuscate_coordinates(&mut [*base_coordinate], &obf_key)?;
+                GeometricOperation::PatternReference { base_coordinate, .. } => {
+                    let mut coords = [*base_coordinate];
+                    self.obfuscator.obfuscate_coordinates(&mut coords, &obf_key)?;
+                    *base_coordinate = coords[0];
                 }
                 GeometricOperation::SparseMapping { ref coordinate_deltas, .. } => {
                     // CoordinateDeltas are relative offsets (i8). Obfuscating them directly
@@ -49,14 +59,11 @@ impl SecurityLayer {
                     // No action for now on coordinate_deltas or value_encoding by CoordinateObfuscator.
                     let _ = coordinate_deltas; // Mark as used
                 }
-                GeometricOperation::FunctionGeneration { ref mut domain, ref parameters, .. } => {
-                    let mut domain_coords = [domain.min_coord, domain.max_coord];
-                    self.obfuscator.obfuscate_coordinates(&mut domain_coords, &obf_key)?;
-                    domain.min_coord = domain_coords[0];
-                    domain.max_coord = domain_coords[1];
-                    // Parameters (Vec<f64>) are not Coordinate3D, so not directly obfuscated by CoordinateObfuscator.
-                    // If they encode sensitive positional data, a different form of protection would be needed.
-                    let _ = parameters; // Mark as used
+                GeometricOperation::FunctionGeneration { domain, .. } => {
+                    let mut coords = [domain.min_coord, domain.max_coord];
+                    self.obfuscator.obfuscate_coordinates(&mut coords, &obf_key)?;
+                    domain.min_coord = coords[0];
+                    domain.max_coord = coords[1];
                 }
             }
         }
@@ -68,13 +75,18 @@ impl SecurityLayer {
         for op in operations.iter_mut() {
             match op {
                 GeometricOperation::RegionFill { ref mut start, ref mut end, .. } => {
-                    self.obfuscator.deobfuscate_coordinates(&mut [*start, *end], &obf_key)?;
+                    let mut coords = [*start, *end];
+                    self.obfuscator.deobfuscate_coordinates(&mut coords, &obf_key)?;
+                    *start = coords[0];
+                    *end = coords[1];
                 }
                 GeometricOperation::PathTrace { ref mut waypoints, .. } => {
                     self.obfuscator.deobfuscate_coordinates(waypoints, &obf_key)?;
                 }
                 GeometricOperation::PatternReference { ref mut base_coordinate, .. } => {
-                    self.obfuscator.deobfuscate_coordinates(&mut [*base_coordinate], &obf_key)?;
+                    let mut coords = [*base_coordinate];
+                    self.obfuscator.deobfuscate_coordinates(&mut coords, &obf_key)?;
+                    *base_coordinate = coords[0];
                 }
                 GeometricOperation::SparseMapping { .. } => {
                     // See notes in obfuscate_geometric_operations. No action.
@@ -162,7 +174,9 @@ mod tests {
         let mut ops = get_sample_ops_for_obf_coverage();
         let original_ops = ops.clone(); // Clone before obfuscation
 
+        println!("Original operations: {:#?}", original_ops);
         layer.obfuscate_geometric_operations(&mut ops, &context).expect("Obfuscation failed");
+        println!("Obfuscated operations: {:#?}", ops);
 
         // Assertions for changes (selective based on what's obfuscated)
         // RegionFill start coord
@@ -188,34 +202,114 @@ mod tests {
         }
 
         layer.deobfuscate_geometric_operations(&mut ops, &context).expect("Deobfuscation failed");
+        println!("Deobfuscated operations: {:#?}", ops);
         assert_eq!(ops, original_ops, "Full deobfuscation did not restore original operations");
     }
 
     #[test]
     fn test_protect_unprotect_data_flow_with_key_integration() { 
-        let mut layer = SecurityLayer::new();
-        layer.set_master_key([0x5u8; 32]).unwrap(); 
-        let context = SecurityContext::default();
-        let mut ops = get_sample_ops_for_obf_coverage(); // Using the more comprehensive sample ops
-        let original_ops_for_value_check = ops.clone(); // Clone before protect
-
-        let proof = layer.protect_data(&mut ops, &context).expect("Protect failed");
+        // Enable test logging
+        std::env::set_var("RUST_LOG", "debug");
+        env_logger::builder().is_test(true).init();
         
-        // Assert that operations have been obfuscated (changed from original)
-        assert_ne!(ops, original_ops_for_value_check, "Operations should be obfuscated by protect_data");
+        log::info!("Starting test_protect_unprotect_data_flow_with_key_integration");
+        
+        // Initialize security layer and set master key
+        let mut layer = SecurityLayer::new();
+        let master_key = [0x5u8; 32];
+        log::info!("Setting master key: {:?}", master_key);
+        layer.set_master_key(master_key).unwrap();
+        
+        let context = SecurityContext::default();
+        
+        // Get sample operations and make a clone for comparison
+        let mut ops = get_sample_ops_for_obf_coverage();
+        let original_ops_for_value_check = ops.clone();
+        
+        log::info!("\nOriginal operations (before protect):");
+        for (i, op) in original_ops_for_value_check.iter().enumerate() {
+            log::info!("  [{}] {:?}", i, op);
+        }
 
+        // Protect the operations (obfuscate + generate proof)
+        log::info!("\nCalling protect_data...");
+        let protect_result = layer.protect_data(&mut ops, &context);
+        
+        if let Err(ref e) = protect_result {
+            log::error!("Protect failed: {:?}", e);
+            log::debug!("Operations after failed protect: {:?}", ops);
+        }
+        assert!(protect_result.is_ok(), "Protect failed: {:?}", protect_result.err());
+        let proof = protect_result.unwrap();
+        
+        // Verify operations were obfuscated
+        log::info!("\nOperations after protect (should be obfuscated):");
+        for (i, op) in ops.iter().enumerate() {
+            log::info!("  [{}] {:?}", i, op);
+        }
+        
+        assert_ne!(
+            ops, original_ops_for_value_check, 
+            "Operations should be obfuscated by protect_data"
+        );
+
+        // Unprotect the operations (deobfuscate + verify proof)
+        log::info!("\nCalling unprotect_data with valid proof...");
         let unprotect_result = layer.unprotect_data(&mut ops, &proof, &context);
+        
+        if let Err(e) = &unprotect_result {
+            log::error!("Unprotect failed: {:?}", e);
+            log::info!("Current operations state when unprotect failed:");
+            for (i, op) in ops.iter().enumerate() {
+                log::info!("  [{}] {:?}", i, op);
+            }
+        }
+        
         assert!(unprotect_result.is_ok(), "Unprotect failed: {:?}", unprotect_result.err());
-        assert_eq!(ops, original_ops_for_value_check, "Unprotect_data did not restore original");
+        
+        log::info!("\nOperations after unprotect (should match original):");
+        for (i, op) in ops.iter().enumerate() {
+            log::info!("  [{}] {:?}", i, op);
+        }
+        
+        // Verify operations were restored to original
+        assert_eq!(
+            ops, original_ops_for_value_check, 
+            "Unprotect_data did not restore original operations"
+        );
 
-        // Test tampering
-        layer.obfuscate_geometric_operations(&mut ops, &context).unwrap(); // Re-obfuscate for tampering test
+        // Test tampering detection
+        log::info!("\nTesting tampering detection...");
+        
+        // Re-obfuscate for tampering test
+        if let Err(e) = layer.obfuscate_geometric_operations(&mut ops, &context) {
+            log::error!("Failed to re-obfuscate for tampering test: {:?}", e);
+            panic!("Failed to re-obfuscate for tampering test: {:?}", e);
+        }
+        
+        // Tamper with the proof
         let mut tampered_proof_bytes = proof.0.clone();
-        if !tampered_proof_bytes.is_empty() { tampered_proof_bytes[0] ^= 0xFF; } else { tampered_proof_bytes.push(1); }
+        if !tampered_proof_bytes.is_empty() { 
+            tampered_proof_bytes[0] ^= 0xFF; 
+            log::debug!("Tampered with proof byte 0: {:02x} -> {:02x}", proof.0[0], tampered_proof_bytes[0]);
+        } else { 
+            tampered_proof_bytes.push(1);
+            log::debug!("Added tampering byte to empty proof");
+        }
         let tampered_proof = IntegrityProof(tampered_proof_bytes);
         
+        // Verify tampered proof is rejected
+        log::info!("Attempting to unprotect with tampered proof...");
         let unprotect_fail_result = layer.unprotect_data(&mut ops, &tampered_proof, &context);
-        assert!(unprotect_fail_result.is_err());
-        assert!(matches!(unprotect_fail_result.err().unwrap(), SecurityError::IntegrityCheckFailed));
+        log::info!("Tamper test result: {:?}", unprotect_fail_result);
+        
+        assert!(unprotect_fail_result.is_err(), "Tampered proof should be rejected");
+        assert!(
+            matches!(unprotect_fail_result.as_ref().err().unwrap(), SecurityError::IntegrityCheckFailed),
+            "Expected IntegrityCheckFailed error for tampered proof, got: {:?}", 
+            unprotect_fail_result.err()
+        );
+        
+        log::info!("\nTest completed successfully!");
     }
 }

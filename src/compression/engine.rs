@@ -184,6 +184,7 @@ mod tests {
         let result_patterned = engine.compress_coordinate_sequence(&patterned_coords);
         assert!(result_patterned.is_ok(), "Patterned input: {:?}", result_patterned.err());
         let ops = result_patterned.unwrap();
+        println!("Generated operations: {:?}", ops);
         assert_eq!(ops.len(), 2); 
         match &ops[0] {
             GeometricOperation::PatternReference { base_coordinate, pattern_id, .. } => {

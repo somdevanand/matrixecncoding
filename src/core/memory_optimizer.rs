@@ -3,7 +3,7 @@ use crate::core::coordinates::Coordinate3D;
 use crate::compression::operations::GeometricOperation; // For LruCache value
 use lru::LruCache;
 use std::collections::VecDeque;
-use std::hash::{Hash, Hasher}; // For OperationKey
+use std::hash::Hash; // For OperationKey
 use std::num::NonZeroUsize;
 use bincode; // For OperationKey hashing if needed
 

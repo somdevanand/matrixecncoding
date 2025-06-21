@@ -1,7 +1,6 @@
 use crate::core::coordinates::Coordinate3D;
 use crate::security::prng::SecurePrng; // Assuming prng.rs is in security module, adjust path if needed
 use std::collections::{HashMap, HashSet}; // Added HashSet for uniqueness check
-use blake3::Hasher; // Add this for mixing seed and position
 use thiserror::Error; // Added for CryptoError
 
 // Define a basic CryptoError enum for now. This might be expanded later.

@@ -50,34 +50,90 @@ impl CoordinateObfuscator {
     pub fn obfuscate_coordinates(
         &self,
         coords: &mut [Coordinate3D],
-        obfuscation_key_slice: &[u8], // Changed from context
-    ) -> Result<(), SecurityError> {
-        if obfuscation_key_slice.is_empty() {
-            return Err(SecurityError::ObfuscationError("Obfuscation key is empty".to_string()));
-        }
-        let key_byte = obfuscation_key_slice[0]; // Use first byte of slice for simplicity
-
-        for coord in coords.iter_mut() {
-            Self::apply_byte_op(coord, key_byte, u8::wrapping_add);
-            self.apply_non_linear_dispersion(coord, key_byte.rotate_left(4), true);
-        }
-        Ok(())
-    }
-
-    pub fn deobfuscate_coordinates(
-        &self,
-        coords: &mut [Coordinate3D],
-        obfuscation_key_slice: &[u8], // Changed from context
+        obfuscation_key_slice: &[u8],
     ) -> Result<(), SecurityError> {
         if obfuscation_key_slice.is_empty() {
             return Err(SecurityError::ObfuscationError("Obfuscation key is empty".to_string()));
         }
         let key_byte = obfuscation_key_slice[0];
 
-        for coord in coords.iter_mut() {
-            self.apply_non_linear_dispersion(coord, key_byte.rotate_left(4), false);
-            Self::apply_byte_op(coord, key_byte, u8::wrapping_sub);
+        #[cfg(test)]
+        println!("Obfuscating {} coordinates with key byte: {}", coords.len(), key_byte);
+
+        for (i, coord) in coords.iter_mut().enumerate() {
+            #[cfg(test)] {
+                println!("  [{}] Original: {:?}", i, coord);
+            }
+            
+            // Apply byte operation
+            let before_byte_op = *coord;
+            Self::apply_byte_op(coord, key_byte, u8::wrapping_add);
+            
+            #[cfg(test)] {
+                println!("  [{}] After byte op (key_byte={}): {:?} -> {:?}", 
+                    i, key_byte, before_byte_op, coord);
+            }
+
+            // Apply non-linear dispersion
+            let before_dispersion = *coord;
+            let dispersion_key = key_byte.rotate_left(4);
+            self.apply_non_linear_dispersion(coord, dispersion_key, true);
+            
+            #[cfg(test)] {
+                println!("  [{}] After dispersion (key={}): {:?} -> {:?}", 
+                    i, dispersion_key, before_dispersion, coord);
+                println!("  [{}] Final obfuscated: {:?}", i, coord);
+            }
         }
+        
+        #[cfg(test)]
+        println!("Finished obfuscating batch of {} coordinates.", coords.len());
+        
+        Ok(())
+    }
+
+    pub fn deobfuscate_coordinates(
+        &self,
+        coords: &mut [Coordinate3D],
+        obfuscation_key_slice: &[u8],
+    ) -> Result<(), SecurityError> {
+        if obfuscation_key_slice.is_empty() {
+            return Err(SecurityError::ObfuscationError("Obfuscation key is empty".to_string()));
+        }
+        let key_byte = obfuscation_key_slice[0];
+
+        #[cfg(test)]
+        println!("Deobfuscating {} coordinates with key byte: {}", coords.len(), key_byte);
+
+        for (i, coord) in coords.iter_mut().enumerate() {
+            #[cfg(test)] {
+                println!("  [{}] Obfuscated input: {:?}", i, coord);
+            }
+            
+            // Reverse non-linear dispersion first
+            let before_reverse_dispersion = *coord;
+            let dispersion_key = key_byte.rotate_left(4);
+            self.apply_non_linear_dispersion(coord, dispersion_key, false);
+            
+            #[cfg(test)] {
+                println!("  [{}] After reverse dispersion (key={}): {:?} -> {:?}", 
+                    i, dispersion_key, before_reverse_dispersion, coord);
+            }
+            
+            // Then reverse the byte operation
+            let before_byte_op = *coord;
+            Self::apply_byte_op(coord, key_byte, u8::wrapping_sub);
+            
+            #[cfg(test)] {
+                println!("  [{}] After reverse byte op (key_byte={}): {:?} -> {:?}", 
+                    i, key_byte, before_byte_op, coord);
+                println!("  [{}] Final deobfuscated: {:?}", i, coord);
+            }
+        }
+        
+        #[cfg(test)]
+        println!("Finished deobfuscating batch of {} coordinates.", coords.len());
+        
         Ok(())
     }
 }
